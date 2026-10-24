@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Nite.Configuration;
 using Nite.Packages;
 
 namespace Nite.Esbuild;
@@ -15,7 +16,7 @@ public static class EsbuildBinary
 
     private static readonly SemaphoreSlim DownloadLock = new(1, 1);
 
-    public static async Task<string> EnsureAsync(HttpClient http, string? registryUrl = null, CancellationToken cancellationToken = default)
+    public static async Task<string> EnsureAsync(HttpClient http, RegistrySettings? registry = null, CancellationToken cancellationToken = default)
     {
         // An explicit path is useful offline or when an organization vendors binaries.
         var overridden = Environment.GetEnvironmentVariable("NITE_ESBUILD_PATH");
@@ -25,7 +26,7 @@ public static class EsbuildBinary
         }
 
         var platform = PlatformPackage();
-        var directory = Path.Combine(NitePaths.CacheDirectory, "esbuild", $"{Version}-{platform}");
+        var directory = Path.Combine(NiteDirectories.Current.Cache, "esbuild", $"{Version}-{platform}");
         var binary = Path.Combine(directory, OperatingSystem.IsWindows() ? "esbuild.exe" : Path.Combine("bin", "esbuild"));
         if (File.Exists(binary))
         {
@@ -40,11 +41,10 @@ public static class EsbuildBinary
                 return binary;
             }
 
-            var registry = new NpmRegistry(http, registryUrl);
-            var packument = await registry.GetPackumentAsync($"@esbuild/{platform}", cancellationToken);
+            var packument = await new NpmRegistry(http, registry).GetPackumentAsync($"@esbuild/{platform}", cancellationToken);
             var manifest = packument.Versions.GetValueOrDefault(Version)
                 ?? throw new NitePackageException($"@esbuild/{platform}@{Version} is not published.");
-            var tarball = await registry.GetTarballAsync(manifest.Dist, cancellationToken);
+            var tarball = await new NpmRegistry(http, registry).GetTarballAsync(manifest.Dist, cancellationToken);
 
             // Extract next to the final folder and swap it in, so a crash never leaves half a binary.
             var staging = directory + "." + Guid.NewGuid().ToString("N");

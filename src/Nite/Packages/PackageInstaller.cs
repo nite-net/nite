@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Nite.Configuration;
 
 namespace Nite.Packages;
 
@@ -42,7 +43,7 @@ public sealed class PackageInstaller
         // The dev server and `nite install` may run at once; only one of them may touch node_modules.
         await using var installLock = await AcquireInstallLockAsync(projectDirectory, cancellationToken);
 
-        var registry = new NpmRegistry(_http, config.Registry);
+        var registry = new NpmRegistry(_http, NiteSettings.Load(projectDirectory).Registry, logger: _logger);
         var lockPath = Path.Combine(projectDirectory, LockFileName);
         var requires = new SortedDictionary<string, string>(config.AllDependencies.ToDictionary(), StringComparer.Ordinal);
 
@@ -51,7 +52,7 @@ public sealed class PackageInstaller
         {
             if (requires.Count > 0)
             {
-                _logger.LogInformation("Resolving {Count} package(s) from {Registry}", requires.Count, config.Registry);
+                _logger.LogInformation("Resolving {Count} package(s) from {Registry}", requires.Count, registry.Settings.DefaultRegistry.TrimEnd('/'));
             }
 
             // Versions to keep: everything already locked, minus whatever is being updated.

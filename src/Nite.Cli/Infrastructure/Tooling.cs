@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
+using Nite.Configuration;
 using Nite.Esbuild;
 using Nite.Packages;
 using Spectre.Console;
@@ -46,7 +47,7 @@ internal static class Tooling
 
     public static async Task<EsbuildService> StartEsbuildAsync(NiteProject project, ILoggerFactory loggers, CancellationToken cancellationToken)
     {
-        var binary = await EsbuildBinary.EnsureAsync(Http, project.Config.Registry, cancellationToken);
+        var binary = await EsbuildBinary.EnsureAsync(Http, NiteSettings.Load(project.Directory).Registry, cancellationToken);
         return new EsbuildService(binary, loggers.CreateLogger<EsbuildService>());
     }
 

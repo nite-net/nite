@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Logging;
 using Nite.Assets;
+using Nite.Configuration;
 using Nite.Esbuild;
 using Nite.Html;
 using Nite.Packages;
@@ -91,7 +92,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
 
     private async Task InitializeAsync()
     {
-        var binary = await EsbuildBinary.EnsureAsync(_http, _project.Config.Registry);
+        var binary = await EsbuildBinary.EnsureAsync(_http, NiteSettings.Load(_project.Directory).Registry);
         _esbuild = new EsbuildService(binary, _loggerFactory.CreateLogger<EsbuildService>());
         _optimizer = new DependencyOptimizer(_esbuild, _loggerFactory.CreateLogger<DependencyOptimizer>());
 

@@ -65,6 +65,24 @@ app.Configure(config =>
         .WithExample("watch")
         .WithExample("watch", "--", "--launch-profile", "https");
 
+    config.AddBranch("config", branch =>
+    {
+        branch.SetDescription("Show or change settings (registries, defaults). Credentials stay in .npmrc.");
+        branch.AddCommand<ConfigListCommand>("list").WithAlias("ls").WithDescription("Effective settings for this directory.").WithExample("config", "list", "--show-origin");
+        branch.AddCommand<ConfigGetCommand>("get").WithDescription("Print one setting.").WithExample("config", "get", "registry");
+        branch.AddCommand<ConfigSetCommand>("set").WithDescription("Set a value in the user config.").WithExample("config", "set", "@mycompany:registry", "https://npm.mycompany.com/");
+        branch.AddCommand<ConfigUnsetCommand>("unset").WithAlias("delete").WithDescription("Remove a value from the user config.");
+        branch.AddCommand<ConfigPathCommand>("path").WithDescription("Print the user config file path.");
+    });
+
+    config.AddBranch("cache", branch =>
+    {
+        branch.SetDescription("Manage the download cache (tarballs, registry metadata, esbuild).");
+        branch.AddCommand<CacheDirCommand>("dir").WithDescription("Print the cache directory.");
+        branch.AddCommand<CacheCleanCommand>("clean").WithAlias("clear").WithDescription("Delete the cache.");
+        branch.AddCommand<CacheVerifyCommand>("verify").WithDescription("Check cached tarballs and remove corrupt ones.");
+    });
+
     config.AddCommand<VersionCommand>("version")
         .WithDescription("Show the Nite version.");
 

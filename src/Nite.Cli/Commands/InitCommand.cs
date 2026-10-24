@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using Nite.Cli.Infrastructure;
 using Nite.Cli.Templates;
+using Nite.Configuration;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -14,9 +15,8 @@ internal sealed class InitSettings : CommandSettings
     public string? Directory { get; set; }
 
     [CommandOption("-t|--template <TEMPLATE>")]
-    [Description("[green]spa[/] (React app + API, the default) or [green]islands[/] (Razor Pages with React islands).")]
-    [DefaultValue(ProjectTemplates.Spa)]
-    public string Template { get; set; } = ProjectTemplates.Spa;
+    [Description("[green]spa[/] (React app + API) or [green]islands[/] (Razor Pages with React islands). Defaults to the init.template setting, which defaults to spa.")]
+    public string? Template { get; set; }
 
     [CommandOption("-n|--name <NAME>")]
     [Description("Project name. Defaults to the directory name.")]
@@ -39,7 +39,7 @@ internal sealed class InitSettings : CommandSettings
     public bool Verbose { get; set; }
 
     public override ValidationResult Validate() =>
-        ProjectTemplates.Names.Contains(Template)
+        Template is null || ProjectTemplates.Names.Contains(Template)
             ? ValidationResult.Success()
             : ValidationResult.Error($"Unknown template '{Template}'. Choose {string.Join(" or ", ProjectTemplates.Names)}.");
 }
@@ -50,6 +50,11 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
     public override async Task<int> ExecuteAsync(CommandContext context, InitSettings settings, CancellationToken cancellationToken)
     {
         var directory = Path.GetFullPath(settings.Directory ?? Environment.CurrentDirectory);
+        var template = settings.Template ?? NiteSettings.Load().Get(NiteSettings.InitTemplateKey) ?? ProjectTemplates.Spa;
+        if (!ProjectTemplates.Names.Contains(template))
+        {
+            throw new CliException($"The init.template setting is '{Markup.Escape(template)}', which is not a template. Choose {string.Join(" or ", ProjectTemplates.Names)}.");
+        }
         var name = settings.Name ?? new DirectoryInfo(directory).Name;
         var safeName = SafeProjectName(name);
 
@@ -70,10 +75,10 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             ["__PORT__"] = Random.Shared.Next(5100, 5900).ToString(),
         };
 
-        AnsiConsole.MarkupLine($"Creating [bold]{settings.Template}[/] project [bold]{Markup.Escape(safeName)}[/] in {Markup.Escape(Tooling.Relative(directory))}");
-        foreach (var (template, content) in ProjectTemplates.For(settings.Template).OrderBy(f => f.Key, StringComparer.Ordinal))
+        AnsiConsole.MarkupLine($"Creating [bold]{template}[/] project [bold]{Markup.Escape(safeName)}[/] in {Markup.Escape(Tooling.Relative(directory))}");
+        foreach (var (file, content) in ProjectTemplates.For(template).OrderBy(f => f.Key, StringComparer.Ordinal))
         {
-            var relative = Fill(template, replacements);
+            var relative = Fill(file, replacements);
             var path = Path.Combine(directory, relative);
             if (File.Exists(path))
             {
@@ -102,7 +107,7 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
         {
             AnsiConsole.MarkupLine("  nite install");
         }
-        AnsiConsole.MarkupLine(settings.Template == ProjectTemplates.Spa ? "  nite watch" : "  nite watch --browser-refresh");
+        AnsiConsole.MarkupLine(template == ProjectTemplates.Spa ? "  nite watch" : "  nite watch --browser-refresh");
         if (settings.NiteSource is null)
         {
             Output.Hint("The project references the Nite NuGet package; until it is published, use --nite-source <path-to-nite-repo>.");

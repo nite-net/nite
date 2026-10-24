@@ -203,6 +203,9 @@ The event never fires in production, so this costs nothing there.
 | `nite update [pkg...]` | `up` | Show current, wanted and latest versions, then update within the ranges. `--check` only reports; `--latest` moves the ranges to the latest versions. |
 | `nite build` | | Production build into `wwwroot/_nite` (publish runs this). |
 | `nite watch` | | `dotnet watch` with Nite handling the browser; see above. |
+| `nite config list` | `config ls` | Effective settings; `--show-origin` shows which file or variable each comes from. |
+| `nite config get\|set\|unset <key>` | | Read or change the user config (`registry`, `@scope:registry`, `init.template`). `config path` prints its location. |
+| `nite cache dir\|clean\|verify` | | Where the cache is; delete it; check cached tarballs and drop corrupt ones. |
 | `nite version` | `--version` | The Nite version (and esbuild and .NET versions). |
 | `nite update-self` | | `dotnet tool update Nite.Cli`, for however nite is installed: local tool manifest, global, or `--tool-path`. |
 
@@ -210,6 +213,44 @@ Project commands work on the current directory; `-C <dir>` points them elsewhere
 `--verbose` shows debug output. Installs keep the versions already in `nite.lock.json` unless a
 range forces a change, so adding one package never upgrades the others; that's what
 `nite update` is for.
+
+## Configuration
+
+Nite keeps per-user files where the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/latest/)
+says they go:
+
+| | Linux and macOS | Windows | Override |
+|---|---|---|---|
+| Config (`config.json`) | `~/.config/nite` | `%APPDATA%\nite` | `NITE_CONFIG_DIR`, `XDG_CONFIG_HOME` |
+| Cache (tarballs, registry metadata, esbuild) | `~/.cache/nite` | `%LOCALAPPDATA%\nite\cache` | `NITE_CACHE_DIR`, `XDG_CACHE_HOME` |
+
+`XDG_*` variables apply on every OS when set. The cache is always safe to delete
+(`nite cache clean`), which also removes the cache older Nite versions left in `~/.local/share/nite`.
+
+Settings come from these places, highest first:
+
+1. `NITE_REGISTRY`
+2. `registry` in the project's `nite.json`
+3. The project's `.npmrc`
+4. The user config, `~/.config/nite/config.json` (edit it with `nite config set`)
+5. The user's `~/.npmrc` (or `$NPM_CONFIG_USERCONFIG`)
+6. Defaults (the public npm registry)
+
+**Private registries** work from the `.npmrc` you probably already have. Scopes map to registries,
+and credentials use npm's `//host/path/:` keys, with `${VAR}` expansion so tokens can stay in the
+environment:
+
+```ini
+@acme:registry=https://npm.acme.dev/
+//npm.acme.dev/:_authToken=${ACME_NPM_TOKEN}
+```
+
+A credential is only sent to URLs under its host and path, never to other hosts (a tarball on a
+CDN, say). `_authToken`, `_auth`, and `username` with `_password` are supported. Nite refuses to
+store credentials in its own config; they stay in `.npmrc`.
+
+Registry metadata is cached with its ETag and revalidated, so resolving an unchanged package
+costs a 304 instead of a download.
 
 ## Limits and non-goals
 
@@ -242,8 +283,8 @@ dotnet test                                          # includes esbuild integrat
 dotnet test --filter "Category!=Integration"         # offline
 ```
 
-Environment variables: `NITE_CACHE_DIR` moves the per-user cache (esbuild binary and tarballs);
-`NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2).
+Environment variables: see [Configuration](#configuration) for the directory and registry
+variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2).
 
 ## License
 

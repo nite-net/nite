@@ -55,7 +55,11 @@ public sealed class NiteConfig
     /// <summary>esbuild target for production output.</summary>
     public string Target { get; init; } = "es2022";
 
-    public string Registry { get; init; } = Packages.NpmRegistry.DefaultUrl;
+    /// <summary>
+    /// Registry for this project's unscoped packages. Usually better set in .npmrc or the user
+    /// config (see <see cref="Configuration.NiteSettings"/>); this wins over both.
+    /// </summary>
+    public string? Registry { get; init; }
 
     public Dictionary<string, string> Dependencies { get; init; } = [];
 

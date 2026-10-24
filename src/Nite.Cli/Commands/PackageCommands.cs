@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Nite.Cli.Infrastructure;
+using Nite.Configuration;
 using Nite.Packages;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -33,7 +34,7 @@ internal sealed class InstallCommand : AsyncCommand<InstallSettings>
         var added = new List<(string Name, string Range)>();
         if (settings.Packages.Length > 0)
         {
-            var registry = new NpmRegistry(Tooling.Http, NiteConfig.Load(directory).Registry);
+            var registry = new NpmRegistry(Tooling.Http, NiteSettings.Load(directory).Registry);
             foreach (var spec in settings.Packages)
             {
                 var (name, requested) = PackageSpec.Parse(spec);
@@ -210,7 +211,7 @@ internal sealed class UpdateCommand : AsyncCommand<UpdateSettings>
         }
         var direct = config.AllDependencies.Where(p => names.Count == 0 || names.Contains(p.Key)).OrderBy(p => p.Key, StringComparer.Ordinal).ToList();
 
-        var registry = new NpmRegistry(Tooling.Http, config.Registry);
+        var registry = new NpmRegistry(Tooling.Http, NiteSettings.Load(project.Directory).Registry);
         var rows = await AnsiConsole.Status().StartAsync("Checking the registry…", async _ =>
             await Task.WhenAll(direct.Select(async pair =>
             {
