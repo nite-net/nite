@@ -19,6 +19,7 @@ public sealed class EsbuildService : IAsyncDisposable
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<Dictionary<string, object?>>> _pending = new();
+    private readonly ConcurrentDictionary<int, PluginCallbacks> _buildPlugins = new();
     private Process? _process;
     private TaskCompletionSource? _handshake;
     private int _nextId;
@@ -61,7 +62,7 @@ public sealed class EsbuildService : IAsyncDisposable
             warnings);
     }
 
-    /// <summary>Runs a one-shot build, like <c>esbuild.build</c> without plugins.</summary>
+    /// <summary>Runs a one-shot build, like <c>esbuild.build</c>.</summary>
     public async Task<EsbuildBuildResult> BuildAsync(EsbuildBuildOptions options, CancellationToken cancellationToken = default)
     {
         var flags = options.Flags.ToList();
@@ -72,10 +73,11 @@ public sealed class EsbuildService : IAsyncDisposable
             flags.Add("--metafile");
         }
 
-        var response = await SendAsync(new Dictionary<string, object?>
+        var key = Interlocked.Increment(ref _nextBuildKey);
+        var request = new Dictionary<string, object?>
         {
             ["command"] = "build",
-            ["key"] = Interlocked.Increment(ref _nextBuildKey),
+            ["key"] = key,
             ["entries"] = options.Entries.Select(e => new List<object?> { e.OutputName ?? "", e.Path }).ToList(),
             ["flags"] = flags,
             ["write"] = options.Write,
@@ -84,7 +86,47 @@ public sealed class EsbuildService : IAsyncDisposable
             ["absWorkingDir"] = options.WorkingDirectory,
             ["nodePaths"] = new List<object?>(),
             ["context"] = false,
-        }, cancellationToken);
+        };
+        if (options.Plugins.Count > 0)
+        {
+            var callbacks = new PluginCallbacks();
+            var plugins = new List<object?>();
+            foreach (var plugin in options.Plugins)
+            {
+                var onResolve = new List<object?>();
+                foreach (var hook in plugin.OnResolve)
+                {
+                    var id = callbacks.Add(plugin.Name, hook);
+                    onResolve.Add(new Dictionary<string, object?> { ["id"] = id, ["filter"] = hook.Filter, ["namespace"] = hook.Namespace });
+                }
+                var onLoad = new List<object?>();
+                foreach (var hook in plugin.OnLoad)
+                {
+                    var id = callbacks.Add(plugin.Name, hook);
+                    onLoad.Add(new Dictionary<string, object?> { ["id"] = id, ["filter"] = hook.Filter, ["namespace"] = hook.Namespace });
+                }
+                plugins.Add(new Dictionary<string, object?>
+                {
+                    ["name"] = plugin.Name,
+                    ["onStart"] = false,
+                    ["onEnd"] = false,
+                    ["onResolve"] = onResolve,
+                    ["onLoad"] = onLoad,
+                });
+            }
+            request["plugins"] = plugins;
+            _buildPlugins[key] = callbacks;
+        }
+
+        Dictionary<string, object?> response;
+        try
+        {
+            response = await SendAsync(request, cancellationToken);
+        }
+        finally
+        {
+            _buildPlugins.TryRemove(key, out _);
+        }
 
         var errors = EsbuildMessage.ListFrom(response.GetValueOrDefault("errors"));
         var warnings = EsbuildMessage.ListFrom(response.GetValueOrDefault("warnings"));
@@ -255,9 +297,13 @@ public sealed class EsbuildService : IAsyncDisposable
                     var (id, isRequest, value) = EsbuildPacket.Decode(body);
                     if (isRequest)
                     {
-                        // Without plugins or watch mode the only thing the service asks is "ping".
-                        var reply = EsbuildPacket.Encode(id, isRequest: false, new Dictionary<string, object?>());
-                        _ = WriteAsync(process, reply, CancellationToken.None);
+                        // "ping", or a plugin callback; callbacks may take a while, so never block reading.
+                        var requestValue = value as Dictionary<string, object?> ?? [];
+                        _ = Task.Run(async () =>
+                        {
+                            var reply = EsbuildPacket.Encode(id, isRequest: false, await HandleRequestAsync(requestValue));
+                            await WriteAsync(process, reply, CancellationToken.None);
+                        });
                     }
                     else if (_pending.TryGetValue(id, out var completion))
                     {
@@ -300,6 +346,113 @@ public sealed class EsbuildService : IAsyncDisposable
         catch (InvalidOperationException)
         {
         }
+    }
+
+    /// <summary>Answers a request from the service: on-resolve and on-load calls into .NET plugins.</summary>
+    private async Task<Dictionary<string, object?>> HandleRequestAsync(Dictionary<string, object?> request)
+    {
+        var command = request.GetValueOrDefault("command") as string;
+        if (command is "on-start" or "on-end")
+        {
+            // Sent for every build with plugins; .NET plugins have no start or end hooks.
+            return new Dictionary<string, object?> { ["errors"] = new List<object?>(), ["warnings"] = new List<object?>() };
+        }
+        if (command is not ("on-resolve" or "on-load")
+            || request.GetValueOrDefault("key") is not int key
+            || !_buildPlugins.TryGetValue(key, out var callbacks)
+            || request.GetValueOrDefault("ids") is not List<object?> ids)
+        {
+            return [];
+        }
+
+        foreach (var hookId in ids.OfType<int>())
+        {
+            var (pluginName, hook) = callbacks.Get(hookId);
+            try
+            {
+                if (hook is EsbuildOnResolve onResolve)
+                {
+                    var result = await onResolve.Callback(new EsbuildResolveArgs(
+                        AsString(request.GetValueOrDefault("path")),
+                        AsString(request.GetValueOrDefault("importer")),
+                        AsString(request.GetValueOrDefault("namespace")),
+                        AsString(request.GetValueOrDefault("resolveDir")),
+                        AsString(request.GetValueOrDefault("kind"))));
+                    if (result is null)
+                    {
+                        continue;
+                    }
+                    var response = new Dictionary<string, object?> { ["id"] = hookId, ["pluginName"] = pluginName };
+                    if (result.Path is not null) response["path"] = result.Path;
+                    if (result.Namespace is not null) response["namespace"] = result.Namespace;
+                    if (result.Suffix is not null) response["suffix"] = result.Suffix;
+                    if (result.External) response["external"] = true;
+                    return response;
+                }
+                if (hook is EsbuildOnLoad onLoad)
+                {
+                    var result = await onLoad.Callback(new EsbuildLoadArgs(
+                        AsString(request.GetValueOrDefault("path")),
+                        AsString(request.GetValueOrDefault("namespace")),
+                        AsString(request.GetValueOrDefault("suffix"))));
+                    if (result is null)
+                    {
+                        continue;
+                    }
+                    var response = new Dictionary<string, object?>
+                    {
+                        ["id"] = hookId,
+                        ["pluginName"] = pluginName,
+                        ["contents"] = Encoding.UTF8.GetBytes(result.Contents),
+                    };
+                    if (result.Loader is not null) response["loader"] = result.Loader;
+                    if (result.ResolveDir is not null) response["resolveDir"] = result.ResolveDir;
+                    if (result.WatchFiles.Count > 0) response["watchFiles"] = result.WatchFiles.ToList();
+                    return response;
+                }
+            }
+            catch (Exception ex)
+            {
+                var plugin = ex as EsbuildPluginException;
+                var message = new Dictionary<string, object?>
+                {
+                    ["id"] = "",
+                    ["pluginName"] = pluginName,
+                    ["text"] = ex.Message,
+                    ["location"] = plugin?.File is null ? null : new Dictionary<string, object?>
+                    {
+                        ["file"] = plugin.File,
+                        ["namespace"] = "file",
+                        ["line"] = plugin.Line,
+                        ["column"] = plugin.Column,
+                        ["length"] = 0,
+                        ["lineText"] = plugin.LineText ?? "",
+                        ["suggestion"] = "",
+                    },
+                    ["notes"] = new List<object?>(),
+                    ["detail"] = -1,
+                };
+                if (plugin is null)
+                {
+                    _logger.LogDebug(ex, "esbuild plugin {Plugin} failed", pluginName);
+                }
+                return new Dictionary<string, object?> { ["id"] = hookId, ["errors"] = new List<object?> { message } };
+            }
+        }
+        return [];
+    }
+
+    private sealed class PluginCallbacks
+    {
+        private readonly List<(string Plugin, object Hook)> _hooks = [];
+
+        public int Add(string plugin, object hook)
+        {
+            _hooks.Add((plugin, hook));
+            return _hooks.Count - 1;
+        }
+
+        public (string Plugin, object Hook) Get(int id) => _hooks[id];
     }
 
     private static string AsString(object? value) => value switch
@@ -346,6 +499,7 @@ public sealed record EsbuildBuildOptions
     public IReadOnlyList<string> Flags { get; init; } = [];
     public bool Write { get; init; } = true;
     public bool Metafile { get; init; }
+    public IReadOnlyList<EsbuildPlugin> Plugins { get; init; } = [];
 }
 
 public sealed record EsbuildTransformResult(string Code, string Map, IReadOnlyList<EsbuildMessage> Warnings);

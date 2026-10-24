@@ -2,11 +2,13 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Logging;
 using Nite.Assets;
 using Nite.Configuration;
+using Nite.Css;
 using Nite.Esbuild;
 using Nite.Html;
 using Nite.Packages;
@@ -20,7 +22,7 @@ namespace Nite.Dev;
 /// pre-bundled dependencies, and a file watcher drives hot updates over a WebSocket: React
 /// components refresh in place, CSS swaps in place, and anything else reloads the page.
 /// </summary>
-public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
+public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 {
     private static readonly FileExtensionContentTypeProvider ContentTypes = new();
 
@@ -45,8 +47,13 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     private readonly ConcurrentDictionary<string, long> _timestamps = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _failing = new(StringComparer.Ordinal);
 
+    // Stylesheets as built for the browser, keyed by file path (or "npm:<specifier>" for package CSS).
+    private readonly ConcurrentDictionary<string, BuiltStylesheet> _stylesheets = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _stylesheetErrors = new(StringComparer.Ordinal);
+
     private NiteProject _project;
     private EsbuildService? _esbuild;
+    private CssPipeline? _css;
     private DependencyOptimizer? _optimizer;
     private DependencyBundle _dependencies = new("", new Dictionary<string, string>());
     private string _lockFingerprint = "";
@@ -57,6 +64,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     private FileSystemWatcher? _sourceWatcher;
     private FileSystemWatcher? _configWatcher;
     private FileSystemWatcher? _envWatcher;
+    private List<FileSystemWatcher>? _projectWatchers;
     private readonly Timer _envTimer;
     private volatile IReadOnlyList<string> _envDefines = [];
     private volatile TsconfigPaths _aliases = new();
@@ -100,6 +108,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         var binary = await EsbuildBinary.EnsureAsync(_http, NiteSettings.Load(_project.Directory).Registry);
         _esbuild = new EsbuildService(binary, _loggerFactory.CreateLogger<EsbuildService>());
         _optimizer = new DependencyOptimizer(_esbuild, _loggerFactory.CreateLogger<DependencyOptimizer>());
+        _css = new CssPipeline(_project, _esbuild, _http, _loggerFactory);
 
         await InstallAsync();
         LoadProjectInputs();
@@ -124,7 +133,15 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             });
         }
 
+        // Stylesheet tools run in an interpreter and take a moment to load; do it alongside bundling.
+        var stylesheets = Directory.Exists(_project.ClientRoot)
+            ? Directory.EnumerateFiles(_project.ClientRoot, "*", SearchOption.AllDirectories)
+                .Where(f => CssPipeline.IsStylesheet(f) && !f.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                .ToList()
+            : [];
+        var warmUp = _css.WarmUpAsync(stylesheets);
         await OptimizeAsync();
+        await warmUp;
         _initialized = true;
         _logger.LogInformation("Nite dev server ready for {ClientRoot}{Refresh}", _project.ClientRoot, _refreshEnabled ? " (React Fast Refresh on)" : "");
     }
@@ -205,6 +222,10 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         {
             await ServeSourceAsync(context, Uri.UnescapeDataString(path["/src/".Length..]));
         }
+        else if (path.StartsWith("/npm/", StringComparison.Ordinal))
+        {
+            await ServePackageFileAsync(context, Uri.UnescapeDataString(path["/npm/".Length..]));
+        }
         else
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -276,24 +297,10 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
                 await WriteErrorModuleAsync(context, ErrorPayload.From(ex, _project.RelativeToClientRoot(requested)));
             }
         }
-        else if (extension == ".css" && asModule)
+        else if (CssPipeline.IsStylesheet(requested))
         {
             _served.TryAdd(requested, 0);
-            var css = await File.ReadAllTextAsync(requested);
-            var id = _project.RelativeToClientRoot(requested);
-            var code = $$"""
-                const id = {{JsonSerializer.Serialize(id)}};
-                const css = {{JsonSerializer.Serialize(css)}};
-                let style = document.querySelector(`style[data-nite-css="${CSS.escape(id)}"]`);
-                if (!style) {
-                  style = document.createElement("style");
-                  style.dataset.niteCss = id;
-                  document.head.appendChild(style);
-                }
-                style.textContent = css;
-                export default css;
-                """;
-            await WriteAsync(context, code, "text/javascript");
+            await ServeStylesheetAsync(context, requested, requested, _project.RelativeToClientRoot(requested), asModule);
         }
         else if (asModule)
         {
@@ -306,6 +313,235 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             await WriteAsync(context, await File.ReadAllBytesAsync(requested), ContentType(requested));
         }
     }
+
+    /// <summary>
+    /// Files from node_modules: package stylesheets imported from code (<c>@mantine/core/styles.css</c>,
+    /// built like any other stylesheet) and the fonts and images their url()s point at.
+    /// </summary>
+    private async Task ServePackageFileAsync(HttpContext context, string specifier)
+    {
+        var nodeModules = Path.Combine(_project.Directory, "node_modules");
+        if (CssPipeline.IsStylesheet(specifier) && (context.Request.Query.ContainsKey("import") || !File.Exists(Path.Combine(nodeModules, specifier))))
+        {
+            await ServeStylesheetAsync(context, "npm:" + specifier, specifier, "npm:" + specifier, context.Request.Query.ContainsKey("import"));
+            return;
+        }
+
+        var file = Path.GetFullPath(Path.Combine(nodeModules, specifier));
+        if (!file.StartsWith(nodeModules + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !File.Exists(file))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        await WriteAsync(context, await File.ReadAllBytesAsync(file), ContentType(file));
+    }
+
+    /// <param name="key">The stylesheet's cache key: its path, or npm:specifier.</param>
+    /// <param name="entry">What esbuild builds: the file, or the package specifier.</param>
+    /// <param name="id">The name the browser knows it by (style tags and hot updates).</param>
+    private async Task ServeStylesheetAsync(HttpContext context, string key, string entry, string id, bool asModule)
+    {
+        BuiltStylesheet sheet;
+        try
+        {
+            sheet = await BuildStylesheetAsync(key, entry, context.Request.PathBase + NiteProject.BasePath);
+        }
+        catch (EsbuildException ex)
+        {
+            _logger.LogWarning("{Message}", ex.Message);
+            var error = ErrorPayload.From(ex, ErrorFile(ex, id));
+            _stylesheetErrors[key] = error.File ?? id;
+            TrackFailedStylesheet(key, entry, context.Request.PathBase + NiteProject.BasePath, ex);
+            if (asModule)
+            {
+                await WriteErrorModuleAsync(context, error);
+            }
+            else
+            {
+                // A <link>ed stylesheet cannot run code; the overlay comes over the socket instead.
+                _ = _hub.BroadcastAsync(new { type = "error", error.Message, error.File, error.Line, error.Column, error.LineText });
+                await WriteAsync(context, $"/* {error.Message.Replace("*/", "* /")} */\n", "text/css");
+            }
+            return;
+        }
+
+        if (!asModule)
+        {
+            await WriteAsync(context, sheet.Css, "text/css");
+            return;
+        }
+
+        var code = new StringBuilder();
+        code.Append($$"""
+            const id = {{JsonSerializer.Serialize(id)}};
+            const css = {{JsonSerializer.Serialize(sheet.Css)}};
+            let style = document.querySelector(`style[data-nite-css="${CSS.escape(id)}"]`);
+            if (!style) {
+              style = document.createElement("style");
+              style.dataset.niteCss = id;
+              document.head.appendChild(style);
+            }
+            style.textContent = css;
+
+            """);
+        if (sheet.Classes is { } classes)
+        {
+            // CSS modules: the class map, plus a named export for each name that can be one.
+            code.Append($"const classes = {JsonSerializer.Serialize(classes)};\nexport default classes;\n");
+            foreach (var name in classes.Keys.Where(IsExportableName))
+            {
+                code.Append($"export const {name} = classes[{JsonSerializer.Serialize(name)}];\n");
+            }
+        }
+        else
+        {
+            code.Append("export default css;\n");
+        }
+        await WriteAsync(context, code.ToString(), "text/javascript");
+    }
+
+    /// <summary>
+    /// Builds a stylesheet for the browser with esbuild and the CSS pipeline: imports inlined,
+    /// Sass/Less/Tailwind/PostCSS applied, url() assets pointed at the dev server. Cached until a
+    /// file that went into it changes.
+    /// </summary>
+    private async Task<BuiltStylesheet> BuildStylesheetAsync(string key, string entry, string basePath)
+    {
+        if (_stylesheets.TryGetValue(key, out var cached) && cached.BasePath == basePath && cached.IsCurrent())
+        {
+            return cached;
+        }
+
+        var files = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        var processed = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        var isModule = CssPipeline.IsCssModule(entry);
+        var plugin = _css!.CreatePlugin(NiteEnvironment.Development,
+            onProcessed: (file, result) =>
+            {
+                files[file] = 0;
+                processed[file] = 0;
+                foreach (var dependency in result.Dependencies)
+                {
+                    files[dependency] = 0;
+                }
+            },
+            rewriteUrl: file => AssetUrl(file, basePath),
+            uniqueModuleNames: true);
+
+        var outDirectory = Path.Combine(_project.WorkDirectory, "css");
+        var entryPath = entry;
+        if (isModule)
+        {
+            // A CSS module's class map only exists on the JavaScript side, so build it through an importer.
+            Directory.CreateDirectory(outDirectory);
+            entryPath = Path.Combine(outDirectory, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(entry)))[..16] + ".js");
+            await File.WriteAllTextAsync(entryPath, $"export {{ default }} from {JsonSerializer.Serialize(NitePaths.ToUrlPath(entry))};\n");
+        }
+
+        var result = await _esbuild!.BuildAsync(new EsbuildBuildOptions
+        {
+            WorkingDirectory = _project.Directory,
+            Entries = [new EsbuildEntry(entryPath)],
+            Flags = ["--bundle", "--format=esm", $"--outdir={outDirectory}", "--conditions=style,development"],
+            Write = false,
+            Plugins = [plugin],
+        });
+
+        var css = result.OutputFiles.FirstOrDefault(f => f.Path.EndsWith(".css", StringComparison.Ordinal)) is { } cssFile
+            ? Encoding.UTF8.GetString(cssFile.Contents)
+            : "";
+        IReadOnlyDictionary<string, string>? classes = null;
+        if (isModule && result.OutputFiles.FirstOrDefault(f => f.Path.EndsWith(".js", StringComparison.Ordinal)) is { } jsFile)
+        {
+            classes = ParseClassMap(Encoding.UTF8.GetString(jsFile.Contents));
+        }
+
+        var stamps = files.Keys.Where(File.Exists).ToDictionary(f => f, Stamp, StringComparer.Ordinal);
+        var built = new BuiltStylesheet(key, basePath, css, classes, stamps) { Processed = processed.Keys.ToHashSet(StringComparer.Ordinal) };
+        _stylesheets[key] = built;
+        if (_css.Tailwind.StylesheetsWithUtilities.Count > 0)
+        {
+            WatchProjectForTailwind();
+        }
+        return built;
+    }
+
+    /// <summary>
+    /// Keeps a stylesheet that failed to build in the cache, marked stale, so that saving the fix
+    /// (in it, or in the partial the error was in) finds it and updates the page.
+    /// </summary>
+    private void TrackFailedStylesheet(string key, string entry, string basePath, EsbuildException ex, BuiltStylesheet? previous = null)
+    {
+        var files = new Dictionary<string, (long, long)>(StringComparer.Ordinal);
+        foreach (var file in previous?.Files.Keys ?? [])
+        {
+            files[file] = (0, 0);
+        }
+        if (File.Exists(entry))
+        {
+            files[Path.GetFullPath(entry)] = (0, 0);
+        }
+        foreach (var error in ex.Errors)
+        {
+            if (error.File is { } file && Path.GetFullPath(Path.Combine(_project.Directory, file)) is var full && File.Exists(full))
+            {
+                files[full] = (0, 0);
+            }
+        }
+        _stylesheets[key] = new BuiltStylesheet(key, basePath, previous?.Css ?? "", previous?.Classes, files);
+    }
+
+    /// <summary>Where the dev server serves an asset a stylesheet references.</summary>
+    private string? AssetUrl(string file, string basePath)
+    {
+        if (_project.IsInsideClientRoot(file))
+        {
+            return $"{basePath}/src/{_project.RelativeToClientRoot(file)}";
+        }
+        var nodeModules = Path.Combine(_project.Directory, "node_modules") + Path.DirectorySeparatorChar;
+        return file.StartsWith(nodeModules, StringComparison.Ordinal)
+            ? $"{basePath}/npm/{NitePaths.ToUrlPath(Path.GetRelativePath(nodeModules, file))}"
+            : null;
+    }
+
+    /// <summary>The class map from esbuild's output for a CSS module (an object literal of string values).</summary>
+    internal static IReadOnlyDictionary<string, string> ParseClassMap(string code)
+    {
+        var classes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in ClassMapEntry().Matches(code))
+        {
+            var name = match.Groups["quoted"].Success ? JsonSerializer.Deserialize<string>($"\"{match.Groups["quoted"].Value}\"")! : match.Groups["name"].Value;
+            classes[name] = JsonSerializer.Deserialize<string>($"\"{match.Groups["value"].Value}\"")!;
+        }
+        return classes;
+    }
+
+    private static readonly HashSet<string> ReservedWords = new(StringComparer.Ordinal)
+    {
+        "default", "break", "case", "catch", "class", "const", "continue", "debugger", "delete", "do", "else", "enum", "export", "extends",
+        "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "null", "return", "super", "switch", "this",
+        "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "let", "static", "implements", "interface", "package",
+        "private", "protected", "public", "await", "classes", "css", "id", "style",
+    };
+
+    private static bool IsExportableName(string name) => IdentifierName().IsMatch(name) && !ReservedWords.Contains(name);
+
+    private string ErrorFile(EsbuildException ex, string fallback) =>
+        ex.Errors.FirstOrDefault()?.File is { } file && Path.GetFullPath(Path.Combine(_project.Directory, file)) is var full && _project.IsInsideClientRoot(full)
+            ? _project.RelativeToClientRoot(full)
+            : fallback;
+
+    private static (long, long) Stamp(string file)
+    {
+        var info = new FileInfo(file);
+        return (info.LastWriteTimeUtc.Ticks, info.Length);
+    }
+
+    [GeneratedRegex("""^\s+(?:"(?<quoted>(?:[^"\\]|\\.)*)"|(?<name>[A-Za-z_$][\w$]*)):\s*"(?<value>(?:[^"\\]|\\.)*)",?\s*$""", RegexOptions.Multiline)]
+    private static partial Regex ClassMapEntry();
+
+    [GeneratedRegex(@"^[A-Za-z_$][\w$]*$")]
+    private static partial Regex IdentifierName();
 
     /// <summary>
     /// Compiles a module and records its imports in the module graph. The cached code still has
@@ -354,6 +590,16 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             }
             if (!ImportScanner.IsBare(specifier))
             {
+                continue;
+            }
+
+            if (CssPipeline.IsStylesheet(specifier))
+            {
+                // Package CSS (@mantine/core/styles.css) is served as a stylesheet, not pre-bundled.
+                if (!IsInstalled(specifier))
+                {
+                    missing.Add(ImportScanner.PackageName(specifier));
+                }
                 continue;
             }
 
@@ -426,6 +672,14 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     {
         if (ResolveImport(importer, specifier) is not { } target)
         {
+            if (ImportScanner.IsBare(specifier) && CssPipeline.IsStylesheet(specifier))
+            {
+                // /_nite/src/a/b.tsx → ../../npm/<specifier>, relative so any PathBase works.
+                var depth = _project.RelativeToClientRoot(importer).Count(c => c == '/') + 1;
+                var key = "npm:" + specifier;
+                var stamp = _timestamps.TryGetValue(key, out var t) ? $"&t={t}" : "";
+                return string.Concat(Enumerable.Repeat("../", depth)) + "npm/" + specifier + "?import" + stamp;
+            }
             return null;
         }
 
@@ -576,6 +830,78 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         _envWatcher.EnableRaisingEvents = true;
     }
 
+    /// <summary>
+    /// Tailwind finds classes anywhere in the project (Razor views, too), not just the client root,
+    /// so once a stylesheet uses it, watch the rest of the project. One watcher per top-level
+    /// folder keeps node_modules, bin and obj (thousands of folders) out of the watch list.
+    /// </summary>
+    private void WatchProjectForTailwind()
+    {
+        if (_projectWatchers is not null)
+        {
+            return;
+        }
+        lock (_stylesheets)
+        {
+            if (_projectWatchers is not null)
+            {
+                return;
+            }
+            var watchers = new List<FileSystemWatcher>();
+            void OnFile(string path)
+            {
+                if (_css is not null && !_project.IsInsideClientRoot(path)
+                    && TailwindScanner.IsScannable(Path.GetRelativePath(_project.Directory, path)) && _css.Tailwind.CoversFile(path))
+                {
+                    OnSourceChanged(path);
+                }
+            }
+            FileSystemWatcher Watch(string directory, bool recursive)
+            {
+                var watcher = new FileSystemWatcher(directory)
+                {
+                    IncludeSubdirectories = recursive,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                watcher.Changed += (_, e) => OnFile(e.FullPath);
+                watcher.Created += (_, e) => OnFile(e.FullPath);
+                watcher.Renamed += (_, e) => OnFile(e.FullPath);
+                watcher.EnableRaisingEvents = true;
+                return watcher;
+            }
+
+            bool ShouldWatch(string directory) =>
+                directory != _project.ClientRoot && !_project.ClientRoot.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && TailwindScanner.IsScannable(Path.GetRelativePath(_project.Directory, directory) + Path.DirectorySeparatorChar + "x")
+                && Path.GetFileName(directory) != "wwwroot";
+
+            var root = Watch(_project.Directory, recursive: false);
+            root.NotifyFilter |= NotifyFilters.DirectoryName;
+            root.Created += (_, e) =>
+            {
+                // A new top-level folder (Pages/, say): watch it, and scan what is already in it.
+                if (!Directory.Exists(e.FullPath) || !ShouldWatch(e.FullPath))
+                {
+                    return;
+                }
+                lock (watchers)
+                {
+                    watchers.Add(Watch(e.FullPath, recursive: true));
+                }
+                foreach (var file in Directory.EnumerateFiles(e.FullPath, "*", SearchOption.AllDirectories))
+                {
+                    OnFile(file);
+                }
+            };
+            watchers.Add(root);
+            foreach (var directory in Directory.EnumerateDirectories(_project.Directory).Where(ShouldWatch))
+            {
+                watchers.Add(Watch(directory, recursive: true));
+            }
+            _projectWatchers = watchers;
+        }
+    }
+
     private void OnSourceChanged(string path)
     {
         var name = Path.GetFileName(path);
@@ -625,9 +951,14 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             {
                 await _hub.BroadcastAsync(new { type = "error", error.Message, error.File, error.Line, error.Column, error.LineText });
             }
-            foreach (var css in plan.Stylesheets)
+            foreach (var key in plan.Stylesheets)
             {
-                var relative = _project.RelativeToClientRoot(css);
+                if (key.StartsWith("npm:", StringComparison.Ordinal))
+                {
+                    await _hub.BroadcastAsync(new { type = "css", path = key, url = $"npm/{key[4..]}?import" });
+                    continue;
+                }
+                var relative = _project.RelativeToClientRoot(key);
                 await _hub.BroadcastAsync(new { type = "css", path = relative, url = $"src/{relative}?import" });
             }
             if (plan.Boundaries.Count == 0 && plan.Cleared.Count > 0)
@@ -667,6 +998,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     private async Task<UpdatePlan> PlanUpdateAsync(IReadOnlyList<string> changed)
     {
         var plan = new UpdatePlan();
+        await PlanStylesheetUpdatesAsync(changed, plan);
         foreach (var path in changed.Distinct())
         {
             var extension = Path.GetExtension(path).ToLowerInvariant();
@@ -684,14 +1016,16 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
                 continue;
             }
 
-            if (extension == ".css")
+            if (CssPipeline.IsStylesheet(path))
             {
-                plan.Stylesheets.Add(path);
-                continue;
+                continue; // handled with the stylesheets that use it
             }
             if (extension == ".html")
             {
-                plan.Reload = true;
+                if (_project.IsInsideClientRoot(path))
+                {
+                    plan.Reload = true;
+                }
                 continue;
             }
 
@@ -730,10 +1064,94 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         return plan;
     }
 
+    /// <summary>
+    /// Stylesheets affected by a set of changes: those built from a changed file (an import, a
+    /// Sass partial, the PostCSS config), and those using Tailwind when a source file gained
+    /// classes. Each is rebuilt now so errors show at once; plain ones swap in place, CSS modules
+    /// update the components that import them.
+    /// </summary>
+    private async Task PlanStylesheetUpdatesAsync(IReadOnlyList<string> changed, UpdatePlan plan)
+    {
+        if (_css is null || _stylesheets.IsEmpty)
+        {
+            return;
+        }
+
+        var changedSet = changed.ToHashSet(StringComparer.Ordinal);
+        var affected = _stylesheets.Values.Where(s => s.Files.Keys.Any(changedSet.Contains)).Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
+
+        var tailwindSources = changed.Where(f => File.Exists(f) && !CssPipeline.IsStylesheet(f) && _css.Tailwind.CoversFile(f)).ToList();
+        if (tailwindSources.Count > 0 && _css.Tailwind.Scanner.ScanFiles(tailwindSources))
+        {
+            var withUtilities = _css.Tailwind.StylesheetsWithUtilities.ToHashSet(StringComparer.Ordinal);
+            // Only stylesheets that themselves emit utilities; one that just @references them does not change.
+            affected.UnionWith(_stylesheets.Values.Where(s => s.Processed.Any(withUtilities.Contains)).Select(s => s.Key));
+        }
+
+        foreach (var key in affected)
+        {
+            if (!_stylesheets.TryRemove(key, out var previous))
+            {
+                continue;
+            }
+            var entry = key.StartsWith("npm:", StringComparison.Ordinal) ? key[4..] : key;
+            var id = key.StartsWith("npm:", StringComparison.Ordinal) ? key : _project.RelativeToClientRoot(key);
+            if (!File.Exists(entry) && !key.StartsWith("npm:", StringComparison.Ordinal))
+            {
+                plan.Reload |= _served.ContainsKey(key) || LoadedImporters(key).Count > 0;
+                continue;
+            }
+
+            try
+            {
+                await BuildStylesheetAsync(key, entry, previous.BasePath);
+            }
+            catch (EsbuildException ex)
+            {
+                var error = ErrorPayload.From(ex, ErrorFile(ex, id));
+                _stylesheetErrors[key] = error.File ?? id;
+                plan.Errors.Add(error);
+                TrackFailedStylesheet(key, entry, previous.BasePath, ex, previous);
+                continue;
+            }
+            if (_stylesheetErrors.TryRemove(key, out var clearedFile))
+            {
+                plan.Cleared.Add(clearedFile);
+            }
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _timestamps[key] = timestamp;
+            if (CssPipeline.IsCssModule(entry))
+            {
+                if (!_refreshEnabled || !await PropagateAsync(key, plan))
+                {
+                    plan.Reload = true;
+                }
+            }
+            else
+            {
+                plan.Stylesheets.Add(key);
+            }
+        }
+    }
+
     private async Task<bool> PropagateAsync(string file, UpdatePlan plan)
     {
         if (!plan.Touched.Add(file))
         {
+            return true;
+        }
+
+        if (CssPipeline.IsStylesheet(file))
+        {
+            // A CSS module's class map changed; the components importing it re-run.
+            foreach (var importer in LoadedImporters(file))
+            {
+                if (!await PropagateAsync(importer, plan))
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -806,6 +1224,16 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         _logger.LogInformation("nite.json changed; updating packages");
         _project = updated;
         _modules.Clear();
+        _stylesheets.Clear();
+        if (_esbuild is not null)
+        {
+            var previousCss = _css;
+            _css = new CssPipeline(_project, _esbuild, _http, _loggerFactory);
+            if (previousCss is not null)
+            {
+                await previousCss.DisposeAsync();
+            }
+        }
         _ready = RunExclusiveAsync(async () =>
         {
             if (_esbuild is null)
@@ -985,6 +1413,14 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     {
         NiteHotReload.Updated -= OnServerHotReload;
         _sourceWatcher?.Dispose();
+        foreach (var watcher in _projectWatchers ?? [])
+        {
+            watcher.Dispose();
+        }
+        if (_css is not null)
+        {
+            await _css.DisposeAsync();
+        }
         _envWatcher?.Dispose();
         await _envTimer.DisposeAsync();
         _configWatcher?.Dispose();
@@ -995,6 +1431,15 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         {
             await _esbuild.DisposeAsync();
         }
+    }
+
+    private sealed record BuiltStylesheet(string Key, string BasePath, string Css, IReadOnlyDictionary<string, string>? Classes,
+        IReadOnlyDictionary<string, (long, long)> Files)
+    {
+        /// <summary>The files that went through the CSS pipeline (not just their dependencies).</summary>
+        public IReadOnlySet<string> Processed { get; init; } = new HashSet<string>();
+
+        public bool IsCurrent() => Files.All(pair => File.Exists(pair.Key) && Stamp(pair.Key) == pair.Value);
     }
 
     private sealed record CachedModule((long Ticks, long Length) Stamp, string Code, IReadOnlyList<string> MissingPackages, bool IsBoundary);

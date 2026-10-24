@@ -263,7 +263,7 @@ public sealed class PackageInstaller
         }
     }
 
-    private static SemVerRange ParseRange(string name, string rangeText, NpmPackument packument)
+    internal static SemVerRange ParseRange(string name, string rangeText, NpmPackument packument)
     {
         var text = rangeText.Trim();
         if (text.Length == 0 || text == "latest")
@@ -275,7 +275,18 @@ public sealed class PackageInstaller
             text = tagged;
         }
 
-        return SemVerRange.TryParse(text, out var range)
+        if (SemVerRange.TryParse(text, out var range))
+        {
+            return range;
+        }
+
+        // Alternatives can name dist-tags too (@tailwindcss/typography's peer range is
+        // ">=3.0.0 || >=4.0.0 || insiders"): use the tagged version, or drop a tag that is not published.
+        var alternatives = text.Split("||").Select(a => a.Trim())
+            .Select(a => packument.DistTags.TryGetValue(a, out var version) ? version : a)
+            .Where(a => SemVerRange.TryParse(a, out _))
+            .ToList();
+        return alternatives.Count > 0 && SemVerRange.TryParse(string.Join(" || ", alternatives), out range)
             ? range
             : throw new NitePackageException($"'{name}@{rangeText}' is not supported. Nite installs registry versions and ranges only.");
     }

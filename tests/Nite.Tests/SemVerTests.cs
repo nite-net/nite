@@ -80,4 +80,18 @@ public class SemVerTests
     {
         Assert.False(SemVerRange.TryParse(range, out _));
     }
+
+    [Fact]
+    public void Accepts_dist_tags_among_range_alternatives()
+    {
+        // @tailwindcss/typography's peer range for tailwindcss.
+        var packument = new Nite.Packages.NpmPackument { DistTags = new() { ["latest"] = "4.3.3", ["insiders"] = "0.0.0-insiders.1" } };
+        var range = Nite.Packages.PackageInstaller.ParseRange("tailwindcss", ">=3.0.0 || >=4.0.0 || insiders", packument);
+        Assert.True(range.IsSatisfiedBy(SemVersion.Parse("4.3.3")));
+
+        // An unpublished tag is dropped rather than failing the whole install.
+        var withoutTag = Nite.Packages.PackageInstaller.ParseRange("tailwindcss", ">=4.0.0 || nightly", new Nite.Packages.NpmPackument());
+        Assert.True(withoutTag.IsSatisfiedBy(SemVersion.Parse("4.1.0")));
+        Assert.Throws<Nite.Packages.NitePackageException>(() => Nite.Packages.PackageInstaller.ParseRange("x", "nightly", new Nite.Packages.NpmPackument()));
+    }
 }

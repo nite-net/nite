@@ -62,7 +62,10 @@ public sealed class NiteConfig
     /// </summary>
     public bool FastRefresh { get; init; } = true;
 
-    /// <summary>esbuild target for production output.</summary>
+    /// <summary>
+    /// esbuild target for production output. When it names only a JavaScript version, Nite adds
+    /// the browsers Vite targets by default, so CSS gets lowered for them too.
+    /// </summary>
     public string Target { get; init; } = "es2022";
 
     /// <summary>
@@ -70,6 +73,9 @@ public sealed class NiteConfig
     /// config (see <see cref="Configuration.NiteSettings"/>); this wins over both.
     /// </summary>
     public string? Registry { get; init; }
+
+    /// <summary>Stylesheet options, named as in Vite's <c>css</c> config.</summary>
+    public NiteCssConfig Css { get; init; } = new();
 
     public Dictionary<string, string> Dependencies { get; init; } = [];
 
@@ -115,4 +121,51 @@ public sealed class NiteConfig
             throw new InvalidOperationException($"{path} is not valid: {ex.Message}", ex);
         }
     }
+}
+
+/// <summary>The <c>css</c> section of <c>nite.json</c>.</summary>
+public sealed class NiteCssConfig
+{
+    /// <summary>
+    /// Run the project's PostCSS config (postcss.config.*) on stylesheets. On by default whenever
+    /// a config exists; packages' own stylesheets in node_modules are never run through it.
+    /// </summary>
+    public bool PostCss { get; init; } = true;
+
+    /// <summary>Options for the Sass (<c>scss</c>, also used for <c>sass</c>) and Less compilers.</summary>
+    public NitePreprocessorOptions PreprocessorOptions { get; init; } = new();
+}
+
+public sealed class NitePreprocessorOptions
+{
+    public SassOptions Scss { get; init; } = new();
+    public LessOptions Less { get; init; } = new();
+}
+
+public sealed class SassOptions
+{
+    /// <summary>
+    /// Code added to the start of every Sass file, such as <c>@use "mantine" as mantine;</c>.
+    /// The client root is a load path, so files there can be used by name.
+    /// </summary>
+    public string? AdditionalData { get; init; }
+
+    /// <summary>Extra folders (relative to the project) to resolve <c>@use</c> and <c>@import</c> from.</summary>
+    public List<string> LoadPaths { get; init; } = [];
+
+    /// <summary>Deprecation warnings to keep quiet, such as <c>import</c> or <c>global-builtin</c>.</summary>
+    public List<string> SilenceDeprecations { get; init; } = [];
+}
+
+public sealed class LessOptions
+{
+    /// <summary>Code added to the start of every Less file.</summary>
+    public string? AdditionalData { get; init; }
+
+    /// <summary>Extra folders (relative to the project) to resolve <c>@import</c> from.</summary>
+    public List<string> Paths { get; init; } = [];
+
+    public bool JavascriptEnabled { get; init; }
+    public Dictionary<string, string> GlobalVars { get; init; } = [];
+    public Dictionary<string, string> ModifyVars { get; init; } = [];
 }

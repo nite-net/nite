@@ -21,7 +21,7 @@ internal sealed class BuildCommand : AsyncCommand<ProjectSettings>
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         // The table below reports the result, so the builder only needs to surface warnings.
         using var warnings = Tooling.CreateLoggerFactory(settings.Verbose, LogLevel.Warning);
-        var manifest = await new NiteBuilder(esbuild, warnings.CreateLogger<NiteBuilder>()).BuildAsync(project, cancellationToken);
+        var manifest = await new NiteBuilder(esbuild, warnings.CreateLogger<NiteBuilder>(), warnings, Tooling.Http).BuildAsync(project, cancellationToken);
         var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
 
         if (manifest.Entries.Count == 0)

@@ -37,6 +37,7 @@ uses for dependency pre-bundling.
 | **Dev server** (`/_nite`) | Each source file is transformed on request (cached until it changes). Relative imports are rewritten to canonical URLs so a module never loads twice. Bare imports (`react`) go through an **import map** to pre-bundled dependencies. |
 | **Pre-bundling** | Every bare import becomes one ESM file, built in a single code-split esbuild pass so `react-dom` and your code share one React. CommonJS packages (React itself, still) get a generated wrapper whose named exports come from a `cjs-module-lexer`-style scan. |
 | **React Fast Refresh** | esbuild has no Fast Refresh transform, so Nite reads esbuild's output, registers each component with `react-refresh` and signs it with its hook calls. A module graph tracks who imports what; a change walks up to the nearest module whose exports are all components, re-imports it, and React swaps the new code in. Changing hooks remounts the component instead of crashing. If the walk reaches the page's entry module, the page reloads. |
+| **Stylesheets** | Sass (Dart Sass's native binary, over its embedded protocol), Less, Tailwind CSS 4 and your PostCSS config run inside Nite, then esbuild bundles the result: CSS modules, `@import` from packages, `url()` assets. The JavaScript tools (PostCSS and its plugins, Tailwind's compiler, Less) come from your `node_modules` and run in [Jint](https://github.com/sebastienros/jint), a JavaScript interpreter written in C#. See [Stylesheets](#stylesheets). |
 | **Other live updates** | CSS (imported or `<link>`ed) swaps in place. Compile errors show an overlay without reloading and clear when the file is fixed. C# hot reloads raise a `nite:server-update` event in the browser. |
 | **HTML entries** | `Client/index.html` is a real entry, as in Vite: local module scripts and stylesheets are compiled in dev and replaced with hashed bundles in production. |
 | **Islands** | A 1.5 KB (minified) loader finds `data-island` elements, loads each island's module on `load`, `idle`, `visible` or a `media` query, and mounts it. A `MutationObserver` mounts islands added later (htmx, Turbo, Blazor enhanced navigation) and unmounts removed ones. |
@@ -130,8 +131,8 @@ Props are serialized as camelCase JSON. Child content is rendered by the server 
 when the island mounts, so it works as a loading state and as content for crawlers. Modules that
 aren't islands can be loaded with `<nite-module src="main.ts" />` (list them in `entries`).
 
-Components can import CSS (`import "./x.css"`), JSON and assets (`import logo from "./logo.svg"`
-gives a URL), as with Vite.
+Components can import CSS (`import "./x.css"`, `import styles from "./x.module.scss"`), JSON and
+assets (`import logo from "./logo.svg"` gives a URL), as with Vite.
 
 ### `nite.json`
 
@@ -145,7 +146,11 @@ gives a URL), as with Vite.
   "fastRefresh": true,             // installs react-refresh as a dev dependency when React is used
   "envPrefix": ["NITE_PUBLIC_"],   // env vars with these prefixes reach client code (see below)
   "jsxInJs": false,                // allow JSX in .js files (Create React App style)
-  "target": "es2022",
+  "target": "es2022",              // plus Vite's default browsers, so CSS is lowered for them too
+  "css": {                         // see Stylesheets
+    "postCss": true,
+    "preprocessorOptions": { "scss": { "additionalData": "" }, "less": {} }
+  },
   "dependencies": { "react": "^19.3.1", "react-dom": "^19.3.1" },
   "devDependencies": { "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0" }
 }
@@ -172,6 +177,72 @@ passwords, never reaches the browser. Editing a `.env` file reloads the page wit
 `tsconfig.app.json`) work in development and production, so `import { cn } from "@/lib/utils"`
 resolves as it does in your editor.
 
+## Stylesheets
+
+Stylesheets go through the same steps as in Vite, in the same order, in development and in
+production builds alike:
+
+1. **Sass** (`.scss`, `.sass`) or **Less** (`.less`), by extension.
+2. **Tailwind CSS 4**, when the file uses it (`@import "tailwindcss"`, `@apply`, `@theme`, …).
+3. **PostCSS**, when the project has a config (`postcss.config.*`, `.postcssrc*`, or `"postcss"` in
+   package.json), with its plugins.
+4. **esbuild**: inlines `@import` (from packages too, through `exports` and the `style`
+   condition), scopes CSS modules (`*.module.css`, `.module.scss`, `.module.less`, with `composes`),
+   handles `url()` assets, and in production minifies and lowers for the target browsers.
+
+Install the tools you use as dev dependencies, as you would for Vite: `nite add -D sass-embedded`
+(or `sass`), `less`, `tailwindcss`, `postcss` plus its plugins. Nite runs them, no Node needed:
+
+- **Sass** runs as the native Dart Sass binary, from the `sass-embedded-<platform>` npm package
+  that matches your `sass`/`sass-embedded` version (downloaded once into the cache, like esbuild).
+  One compiler process serves every compile. `pkg:` URLs work, and the client root and
+  `node_modules` are load paths.
+- **PostCSS, Tailwind and Less** are plain JavaScript. Nite bundles them from your `node_modules`
+  with esbuild and runs the bundle in Jint, with just enough of Node's built-ins (`fs`, `path`,
+  `url`…) for them to work. The interpreter is slower than Node: expect a second or two the first
+  time a dev server starts compiling a Tailwind stylesheet, then incremental updates in tens of
+  milliseconds. Production builds pay it once.
+- **Tailwind** is Tailwind's own compiler (the `tailwindcss` package). Nite stands in for its
+  native file scanner: class names are found in the whole project folder, so classes used only in
+  Razor views (`.cshtml`, `.razor`) count too. `.gitignore`d folders, `bin`, `obj` and
+  `node_modules` are skipped, and `@source`, `@source not` and `@source inline()` work as
+  documented. `@plugin` and `@config` load from `node_modules`. `@tailwindcss/vite` and
+  `@tailwindcss/postcss` are not needed (they need native code); if your PostCSS config lists the
+  latter, Nite skips it and runs Tailwind itself. Tailwind 3 is not supported.
+- PostCSS runs on your stylesheets, not on CSS shipped in packages (it is already built, and slow
+  to re-process). Set `"css": { "postCss": false }` to turn it off.
+
+Preprocessor options use Vite's names. `additionalData` is prepended to every file, which is how
+Sass setups share variables and mixins; files in the client root can be used by name:
+
+```jsonc
+"css": {
+  "preprocessorOptions": {
+    "scss": { "additionalData": "@use \"src/mantine\" as mantine;", "loadPaths": [], "silenceDeprecations": [] },
+    "less": { "additionalData": "", "paths": [], "javascriptEnabled": false, "globalVars": {}, "modifyVars": {} }
+  }
+}
+```
+
+In development every stylesheet updates in place, and so does everything that depends on a file
+you save: a Sass partial, a Less import, the PostCSS config, or (for Tailwind) any source file that
+gains a class. CSS modules update the components that use them, with state kept. Errors show in
+the overlay with the file and line (Sass line numbers account for `additionalData`).
+
+### Mantine
+
+[Mantine](https://mantine.dev) works as its [Vite guide](https://mantine.dev/guides/vite/) sets it
+up: `@mantine/core/styles.css` imported from code, `postcss-preset-mantine` and
+`postcss-simple-vars` in `postcss.config.cjs` (mixins, `rem()`, `light-dark()` and the breakpoint
+variables in your own CSS modules), and optionally Sass with the `_mantine.scss` helpers through
+`additionalData`. Importing a Mantine Vite app with `nite init --from` carries all of that over,
+including the `additionalData` from `vite.config`.
+
+```bash
+nite add @mantine/core @mantine/hooks
+nite add -D postcss postcss-preset-mantine postcss-simple-vars
+```
+
 ## Importing an existing project
 
 ```bash
@@ -182,20 +253,23 @@ nite init my-app --from ../vite-app             # do it (the source is never mod
 Works with **Vite** (React) and **Create React App** projects managed by npm, Yarn (classic or
 Berry), pnpm or Bun. Nite reads the project and:
 
-- Copies `index.html` and `src/` into `Client/`, `public/` into `wwwroot/`, tsconfig files into
-  `Client/`, and `.env*` files into the project.
+- Copies `index.html` and `src/` into `Client/`, `public/` into `wwwroot/`, tsconfig and
+  PostCSS/Tailwind config files into `Client/`, and `.env*` files into the project.
 - Keeps **the exact versions the project runs today**: it reads `package-lock.json`, `yarn.lock`,
   `pnpm-lock.yaml` or `bun.lock` and prefers those versions while resolving (the binary
   `bun.lockb` is not read; run `bun install --save-text-lockfile` first).
 - Imports runtime `dependencies`, plus any devDependency that `src/` actually imports (bundlers
-  never cared which list a library was in), plus `@types/*` and `typescript`. Build, lint and test
+  never cared which list a library was in), plus `@types/*`, `typescript` and the stylesheet tools
+  (PostCSS and its plugins, Sass, Less, Tailwind and its plugins). Build, lint and test
   tooling (Vite, Babel, ESLint, oxlint, Jest, Vitest, testing libraries…) is skipped, as are
   `file:`, `workspace:`, git and URL dependencies. Imports from test files do not count.
+- Copies `css.preprocessorOptions.*.additionalData` from vite.config into `nite.json` (including
+  the path-building template literal in Mantine's guide); anything it cannot evaluate is reported.
 - Sets `envPrefix` (`VITE_` or `REACT_APP_`, or `envPrefix` from vite.config), turns on `jsxInJs`
   for Create React App, rewrites `public/index.html`'s `%PUBLIC_URL%` and adds its entry script,
   and swaps the `vite/client` / `react-scripts` types for Nite's (`nite-env.d.ts`).
-- Reports what it could not bring along: Vite plugins other than React's, Tailwind, CSS modules,
-  Sass/Less, `import.meta.glob`, `?raw`/`?url`/`?worker` imports, SVGs as React components (svgr),
+- Reports what it could not bring along: Vite plugins other than React's and Tailwind's, Stylus,
+  Tailwind 3, `import.meta.glob`, `?raw`/`?url`/`?worker` imports, SVGs as React components (svgr),
   `overrides`/`resolutions`, and package.json scripts. The dev `proxy` is not needed: the app and
   its API share an origin.
 
@@ -210,7 +284,9 @@ Next.js, Remix and Astro apps have their own servers and are out of scope.
 |---|---|
 | A React component | Fast Refresh: updated in place, state kept (about 100 to 200 ms). |
 | A helper module (`format.ts`) | The components that use it refresh; state kept. |
-| CSS | Swapped in place. |
+| CSS, Sass, Less | Swapped in place; so is every stylesheet that imports the file. |
+| A CSS module | The components using it refresh; state kept. |
+| A component that uses a new Tailwind class (or a Razor view) | The Tailwind stylesheet is rebuilt and swapped in. |
 | The entry (`main.tsx`) or `index.html` | Page reloads. |
 | C# that hot reload can apply | Applied in the running app; the browser gets a `nite:server-update` event. |
 | C# that needs a restart (new endpoint in `Program.cs`, say) | dotnet watch restarts the app; the page waits for it and reloads (about 10 s). |
@@ -268,7 +344,7 @@ says they go:
 | | Linux and macOS | Windows | Override |
 |---|---|---|---|
 | Config (`config.json`) | `~/.config/nite` | `%APPDATA%\nite` | `NITE_CONFIG_DIR`, `XDG_CONFIG_HOME` |
-| Cache (tarballs, registry metadata, esbuild) | `~/.cache/nite` | `%LOCALAPPDATA%\nite\cache` | `NITE_CACHE_DIR`, `XDG_CACHE_HOME` |
+| Cache (tarballs, registry metadata, esbuild, Sass) | `~/.cache/nite` | `%LOCALAPPDATA%\nite\cache` | `NITE_CACHE_DIR`, `XDG_CACHE_HOME` |
 
 `XDG_*` variables apply on every OS when set. The cache is always safe to delete
 (`nite cache clean`), which also removes the cache older Nite versions left in `~/.local/share/nite`.
@@ -302,8 +378,10 @@ costs a 304 instead of a download.
 
 Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
 
-- **No Vite/Rollup plugins.** Vue SFCs, Svelte, MDX, Tailwind-as-a-plugin and friends need a JS
-  runtime. If you need them, use Vite; it's the right tool.
+- **No Vite/Rollup plugins.** Vue SFCs, Svelte, MDX and friends need Vite's plugin pipeline. If
+  you need them, use Vite; it's the right tool. (PostCSS plugins do work; see Stylesheets.)
+- **PostCSS plugins and Tailwind plugins must be plain JavaScript.** Ones that load native
+  addons (`.node` files) cannot run in the interpreter.
 - **No type checking**, same as Vite: esbuild strips types. Run `tsc --noEmit` (or the native
   TypeScript compiler) in CI.
 - **Fast Refresh is heuristic.** Components are found in esbuild's output by shape: PascalCase
@@ -315,9 +393,10 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
   server-side picture.
 - **Registry packages only**: no git, `file:` or `npm:` alias dependencies. Optional dependencies
   are skipped and install scripts never run, so packages that need a postinstall step won't work.
-- **Not yet:** CSS modules (`*.module.css`), Sass/Less, Tailwind's build step, `import.meta.glob`,
-  Vite's `?raw`/`?url`/`?worker` imports, CSS `url()` rewriting in dev, and CSS shipped inside npm
-  packages. The importer warns about each of these when a project uses them.
+- **Not yet:** Stylus, `import.meta.glob`, Vite's `?raw`/`?url`/`?worker` imports, CSS modules'
+  `localsConvention`, and CSS that a package's own JavaScript imports (import its stylesheet from
+  your code instead, as Mantine does). The importer warns about each of these when a project uses
+  them. Relative `url()`s inside Sass partials are not rebased (Vite does rebase them).
 - Production asset URLs assume the app is served from the site root (`/_nite/...`), except in
   HTML served by `MapNiteSpa`, which adds the request's path base. Hashed bundles are revalidated
   with ETags rather than cached as immutable.
@@ -326,12 +405,14 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
 
 ```bash
 dotnet build
-dotnet test                                          # includes esbuild integration tests (needs network once)
+dotnet test                                          # includes esbuild and stylesheet integration tests (needs network)
 dotnet test --filter "Category!=Integration"         # offline
 ```
 
 Environment variables: see [Configuration](#configuration) for the directory and registry
-variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2).
+variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2),
+and `NITE_SASS_PATH` to a `dart-sass` folder (from Dart Sass's standalone release) to use instead
+of downloading one.
 
 ## License
 

@@ -22,11 +22,22 @@ public static partial class ProjectImporter
     [
         "vite", "@vitejs/", "react-scripts", "@craco/", "webpack", "@babel/", "babel-", "eslint", "@eslint/",
         "typescript-eslint", "@typescript-eslint/", "prettier", "vitest", "@vitest/", "jest", "@jest/", "ts-jest",
-        "@testing-library/", "postcss", "autoprefixer", "rollup", "@rollup/", "esbuild", "@swc/", "globals",
+        "@testing-library/", "rollup", "@rollup/", "esbuild", "@swc/", "globals",
         "husky", "lint-staged", "concurrently", "cross-env", "nodemon", "@types/node", "@types/jest",
     ];
 
-    private static readonly string[] SupportedVitePlugins = ["@vitejs/plugin-react", "@vitejs/plugin-react-swc"];
+    private static readonly string[] SupportedVitePlugins = ["@vitejs/plugin-react", "@vitejs/plugin-react-swc", "@tailwindcss/vite"];
+
+    // Tailwind's integrations Nite replaces by running Tailwind itself (they need native code).
+    private static readonly string[] TailwindIntegrations = ["@tailwindcss/vite", "@tailwindcss/postcss", "@tailwindcss/cli", "@tailwindcss/node", "@tailwindcss/oxide", "@tailwindcss/webpack"];
+
+    /// <summary>Config files for the stylesheet tools, copied next to the client code.</summary>
+    private static readonly string[] StyleConfigFiles =
+    [
+        "postcss.config.js", "postcss.config.cjs", "postcss.config.mjs", "postcss.config.ts", "postcss.config.cts", "postcss.config.mts",
+        ".postcssrc", ".postcssrc.json", ".postcssrc.js", ".postcssrc.cjs", ".postcssrc.mjs",
+        "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts",
+    ];
 
     public static ImportPlan Analyze(string source)
     {
@@ -105,11 +116,18 @@ public static partial class ProjectImporter
             {
                 plan.Skipped.Add(new SkippedPackage(name, spec, "not a registry version (file:, workspace:, git and URLs are not supported)"));
             }
+            else if (TailwindIntegrations.Contains(name))
+            {
+                plan.Skipped.Add(new SkippedPackage(name, spec, "Nite runs Tailwind itself; the tailwindcss package is all it needs"));
+            }
+            else if (IsStyleTooling(name))
+            {
+                // PostCSS (and its plugins), Sass, Less and Tailwind run inside Nite, from node_modules.
+                plan.DevDependencies[name] = spec;
+            }
             else if (IsTooling(name) && !imported.Contains(name))
             {
-                plan.Skipped.Add(new SkippedPackage(name, spec, name.StartsWith("tailwindcss", StringComparison.Ordinal) || name.StartsWith("@tailwindcss/", StringComparison.Ordinal)
-                    ? "Tailwind needs a build step Nite does not run yet"
-                    : "build or test tooling; Nite replaces the build and does not run the rest"));
+                plan.Skipped.Add(new SkippedPackage(name, spec, "build or test tooling; Nite replaces the build and does not run the rest"));
             }
             else if (!isDev || imported.Contains(name))
             {
@@ -134,9 +152,16 @@ public static partial class ProjectImporter
             plan.Warnings.Add($"src/ imports '{package}', which package.json does not list. Add it with nite add {package}.");
         }
 
-        if (dependencies.Keys.Concat(devDependencies.Keys).Any(n => n == "tailwindcss" || n.StartsWith("@tailwindcss/", StringComparison.Ordinal)))
+        var tailwind = dependencies.GetValueOrDefault("tailwindcss") ?? devDependencies.GetValueOrDefault("tailwindcss");
+        if (tailwind is not null && tailwind.TrimStart('^', '~', '=', '>', 'v', ' ').StartsWith("3", StringComparison.Ordinal))
         {
-            plan.Warnings.Add("Tailwind CSS needs its build step, which Nite does not run yet; classes from Tailwind will be missing.");
+            plan.Warnings.Add("Tailwind CSS 3 is not supported; Nite runs Tailwind 4. See https://tailwindcss.com/docs/upgrade-guide (npx @tailwindcss/upgrade does most of it).");
+        }
+        else if ((dependencies.ContainsKey("@tailwindcss/vite") || devDependencies.ContainsKey("@tailwindcss/vite") || dependencies.ContainsKey("@tailwindcss/postcss") || devDependencies.ContainsKey("@tailwindcss/postcss"))
+            && tailwind is null)
+        {
+            plan.DevDependencies["tailwindcss"] = devDependencies.GetValueOrDefault("@tailwindcss/vite") ?? devDependencies.GetValueOrDefault("@tailwindcss/postcss") ?? "^4.0.0";
+            plan.Notes.Add("Added tailwindcss, which @tailwindcss/vite brought in before.");
         }
         foreach (var key in new[] { "overrides", "resolutions" })
         {
@@ -191,6 +216,14 @@ public static partial class ProjectImporter
             var name = Path.GetFileName(file);
             var kind = name is "vite-env.d.ts" or "react-app-env.d.ts" ? ImportFileKind.EnvironmentTypes : ImportFileKind.Copy;
             plan.Files.Add(new ImportFile(file, "Client/" + relative, kind));
+        }
+        foreach (var name in StyleConfigFiles)
+        {
+            var path = Path.Combine(source, name);
+            if (File.Exists(path))
+            {
+                plan.Files.Add(new ImportFile(path, "Client/" + name, ImportFileKind.Copy));
+            }
         }
         foreach (var tsconfig in Directory.EnumerateFiles(source, "tsconfig*.json"))
         {
@@ -285,6 +318,19 @@ public static partial class ProjectImporter
         if (plan.JsxInJs)
         {
             builder.Append("  \"jsxInJs\": true,\n");
+        }
+        if (plan.ScssAdditionalData is not null || plan.LessAdditionalData is not null)
+        {
+            var languages = new List<string>();
+            if (plan.ScssAdditionalData is not null)
+            {
+                languages.Add($"      \"scss\": {{ \"additionalData\": {JsonSerializer.Serialize(plan.ScssAdditionalData, NiteConfig.JsonOptions)} }}");
+            }
+            if (plan.LessAdditionalData is not null)
+            {
+                languages.Add($"      \"less\": {{ \"additionalData\": {JsonSerializer.Serialize(plan.LessAdditionalData, NiteConfig.JsonOptions)} }}");
+            }
+            builder.Append("  \"css\": {\n    \"preprocessorOptions\": {\n").Append(string.Join(",\n", languages)).Append("\n    }\n  },\n");
         }
         builder.Append($"  \"dependencies\": {Object(plan.Dependencies, "  ")},\n");
         builder.Append($"  \"devDependencies\": {Object(plan.DevDependencies, "  ")}\n");
@@ -394,13 +440,9 @@ public static partial class ProjectImporter
             }
         }
 
-        if (files.Any(f => f.EndsWith(".module.css", StringComparison.Ordinal)))
+        if (files.Any(f => Path.GetExtension(f) is ".styl" or ".stylus"))
         {
-            warnings.Add("CSS modules (*.module.css) are not supported yet; their class names will not be scoped or mapped.");
-        }
-        if (files.Any(f => Path.GetExtension(f) is ".scss" or ".sass" or ".less" or ".styl"))
-        {
-            warnings.Add("Sass, Less and Stylus are not compiled; convert those stylesheets to CSS.");
+            warnings.Add("Stylus is not supported; convert those stylesheets to CSS, Sass or Less.");
         }
         return (warnings.ToList(), code.Count);
     }
@@ -443,10 +485,83 @@ public static partial class ProjectImporter
         {
             plan.Notes.Add("The dev server proxy in vite.config is not needed: the app and its API share an origin in Nite.");
         }
+        foreach (var (language, value, complete) in AdditionalData(text))
+        {
+            if (!complete)
+            {
+                plan.Warnings.Add($"vite.config sets css.preprocessorOptions.{language}.additionalData with code Nite cannot evaluate; copy the result into \"css\" in nite.json.");
+            }
+            else if (language is "scss" or "sass")
+            {
+                plan.ScssAdditionalData = value;
+            }
+            else if (language == "less")
+            {
+                plan.LessAdditionalData = value;
+            }
+        }
         if (EnvPrefixOption().Match(text) is { Success: true } prefix)
         {
             plan.EnvPrefix.Clear();
             plan.EnvPrefix.AddRange(prefix.Groups["values"].Value.Split(',').Select(v => v.Trim().Trim('"', '\'', '`')).Where(v => v.Length > 0));
+        }
+    }
+
+    /// <summary>
+    /// additionalData strings from vite.config's css.preprocessorOptions. Template literals are
+    /// handled when each interpolation only builds a path from a string literal, as in Mantine's
+    /// guide: <c>`@use "${path.join(process.cwd(), 'src/_mantine')…}" as mantine;`</c> becomes
+    /// <c>@use "src/_mantine" as mantine;</c>, which resolves because the client root is a load path.
+    /// </summary>
+    internal static IEnumerable<(string Language, string Value, bool Complete)> AdditionalData(string config)
+    {
+        foreach (Match match in AdditionalDataKey().Matches(config))
+        {
+            var before = config[..match.Index];
+            var language = LanguageKey().Matches(before).LastOrDefault()?.Groups["lang"].Value ?? "scss";
+            var start = match.Index + match.Length;
+            if (start >= config.Length || config[start] is not ('"' or '\'' or '`'))
+            {
+                yield return (language, "", false);
+                continue;
+            }
+
+            var quote = config[start];
+            var value = new StringBuilder();
+            var complete = true;
+            var i = start + 1;
+            for (; i < config.Length && config[i] != quote; i++)
+            {
+                if (config[i] == '\\' && i + 1 < config.Length)
+                {
+                    value.Append(config[++i] switch { 'n' => '\n', 't' => '\t', var c => c });
+                }
+                else if (quote == '`' && config[i] == '$' && i + 1 < config.Length && config[i + 1] == '{')
+                {
+                    var depth = 0;
+                    var end = i + 1;
+                    for (; end < config.Length; end++)
+                    {
+                        if (config[end] == '{') depth++;
+                        else if (config[end] == '}' && --depth == 0) break;
+                    }
+                    var expression = config[(i + 2)..Math.Min(end, config.Length)];
+                    if (PathExpression().Match(expression) is { Success: true } path && (expression.Contains("process.cwd()") || expression.Contains("__dirname")))
+                    {
+                        value.Append(path.Groups["path"].Value.TrimStart('.', '/'));
+                    }
+                    else
+                    {
+                        complete = false;
+                    }
+                    i = end;
+                }
+                else
+                {
+                    value.Append(config[i]);
+                }
+            }
+            yield return (language, value.ToString(), complete && i < config.Length);
         }
     }
 
@@ -469,9 +584,14 @@ public static partial class ProjectImporter
     internal static bool IsRegistrySpec(string spec) =>
         !spec.Contains(':') && !spec.Contains('/') && (spec.Length == 0 || SemVerRange.TryParse(spec, out _) || TagLike().IsMatch(spec));
 
+    internal static bool IsStyleTooling(string name) =>
+        name is "postcss" or "autoprefixer" or "sass" or "sass-embedded" or "less" or "tailwindcss" or "cssnano"
+        || name.StartsWith("postcss-", StringComparison.Ordinal) || name.StartsWith("@csstools/", StringComparison.Ordinal)
+        || (name.StartsWith("@tailwindcss/", StringComparison.Ordinal) && !TailwindIntegrations.Contains(name));
+
     private static bool IsTooling(string name) =>
         ToolingPrefixes.Any(prefix => name == prefix || (prefix.EndsWith('/') ? name.StartsWith(prefix, StringComparison.Ordinal) : name.StartsWith(prefix + "-", StringComparison.Ordinal) || name == prefix))
-        || name.StartsWith("tailwindcss", StringComparison.Ordinal) || name.StartsWith("@tailwindcss/", StringComparison.Ordinal);
+        || TailwindIntegrations.Contains(name);
 
     [GeneratedRegex(@"\.(test|spec)\.[cm]?[jt]sx?$")]
     private static partial Regex TestFileName();
@@ -494,6 +614,15 @@ public static partial class ProjectImporter
     [GeneratedRegex(@"\benvPrefix\s*:\s*\[?(?<values>[^\]\n]+?)\]?\s*,?\s*$", RegexOptions.Multiline)]
     private static partial Regex EnvPrefixOption();
 
+    [GeneratedRegex(@"\badditionalData\s*:\s*")]
+    private static partial Regex AdditionalDataKey();
+
+    [GeneratedRegex(@"\b(?<lang>scss|sass|less)\s*:\s*\{")]
+    private static partial Regex LanguageKey();
+
+    [GeneratedRegex(@"(?<q>['""])(?<path>[^'""]+)\k<q>")]
+    private static partial Regex PathExpression();
+
     [GeneratedRegex(@"^[a-z][a-z0-9._-]*$")]
     private static partial Regex TagLike();
 }
@@ -508,6 +637,8 @@ public sealed class ImportPlan
     public List<string> EnvPrefix { get; } = [];
     public bool JsxInJs { get; set; }
     public bool HasNodeTypes { get; set; }
+    public string? ScssAdditionalData { get; set; }
+    public string? LessAdditionalData { get; set; }
     public SortedDictionary<string, string> Dependencies { get; } = new(StringComparer.Ordinal);
     public SortedDictionary<string, string> DevDependencies { get; } = new(StringComparer.Ordinal);
     public List<SkippedPackage> Skipped { get; } = [];

@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Nite.Css;
 using Nite.Esbuild;
 using Nite.Html;
 using Nite.Runtime;
@@ -13,8 +14,12 @@ namespace Nite.Build;
 /// The production build: islands, configured entries and the island loader bundled together in a
 /// single esbuild pass (minified, code-split, content-hashed) into <c>wwwroot/_nite</c>.
 /// </summary>
-public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
+/// <param name="loggerFactory">For the stylesheet tools (Sass, PostCSS and friends) to report through.</param>
+/// <param name="http">Downloads the Sass compiler the first time a project needs it.</param>
+public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, ILoggerFactory? loggerFactory = null, HttpClient? http = null)
 {
+    private static readonly Lazy<HttpClient> SharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromMinutes(2) });
+
     private static readonly string[] AssetExtensions =
         [".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".webm", ".mp3", ".wav"];
 
@@ -101,7 +106,7 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
         var flags = new List<string>
         {
             "--bundle", "--splitting", "--format=esm", "--platform=browser", "--minify", "--sourcemap",
-            $"--target={config.Target}", $"--outdir={project.OutputDirectory}",
+            $"--target={BuildTarget(config.Target)}", $"--outdir={project.OutputDirectory}",
             "--entry-names=[dir]/[name]-[hash]", "--chunk-names=chunks/[name]-[hash]", "--asset-names=assets/[name]-[hash]",
             $"--public-path={NiteProject.BasePath}",
             "--jsx=automatic", $"--jsx-import-source={config.JsxImportSource}",
@@ -120,12 +125,15 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
         }
         flags.AddRange(AssetExtensions.Select(extension => $"--loader:{extension}=file"));
 
+        // Stylesheets go through Sass/Less, Tailwind and PostCSS on their way into the bundle.
+        await using var stylesheets = new CssPipeline(project, esbuild, http ?? SharedHttp.Value, loggerFactory ?? NullLoggerFactory.Instance);
         var result = await esbuild.BuildAsync(new EsbuildBuildOptions
         {
             WorkingDirectory = project.Directory,
             Entries = entries.Values.Select(e => new EsbuildEntry(e.File, e.OutputName)).ToList(),
             Flags = flags,
             Metafile = true,
+            Plugins = [stylesheets.CreatePlugin(NiteEnvironment.Production)],
         }, cancellationToken);
 
         foreach (var warning in result.Warnings)
@@ -183,6 +191,16 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return manifest;
     }
+
+    /// <summary>
+    /// A target of only a JavaScript version (the default es2022) says nothing about CSS, so esbuild
+    /// would leave nesting and other new syntax (which Tailwind emits) as is. Add the browsers
+    /// Vite targets by default ("baseline widely available") unless the config names browsers.
+    /// </summary>
+    internal static string BuildTarget(string target) =>
+        target.Split(',').All(t => t.Trim().StartsWith("es", StringComparison.OrdinalIgnoreCase))
+            ? target + ",chrome107,edge107,firefox104,safari16"
+            : target;
 
     /// <summary><c>index.html</c> at the client root (if any) plus HTML pages listed in <c>entries</c>.</summary>
     private static List<(string Page, string Html)> HtmlEntries(NiteProject project)

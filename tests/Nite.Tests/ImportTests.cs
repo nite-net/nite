@@ -105,7 +105,8 @@ public class ProjectImporterTests : IDisposable
               "dependencies": { "react": "^19.2.0", "react-dom": "^19.2.0", "ui-kit": "workspace:*" },
               "devDependencies": {
                 "vite": "^7.1.0", "@vitejs/plugin-react": "^5.0.0", "typescript": "~5.9.0", "@types/react": "^19.2.0",
-                "eslint": "^9.0.0", "date-fns": "^4.1.0", "tailwindcss": "^4.0.0", "vite-plugin-svgr": "^4.0.0"
+                "eslint": "^9.0.0", "date-fns": "^4.1.0", "tailwindcss": "^4.0.0", "@tailwindcss/vite": "^4.0.0", "vite-plugin-svgr": "^4.0.0",
+                "postcss": "^8.5.0", "postcss-preset-mantine": "^1.18.0", "sass-embedded": "^1.90.0"
               }
             }
             """);
@@ -113,7 +114,8 @@ public class ProjectImporterTests : IDisposable
             import { defineConfig } from "vite";
             import react from "@vitejs/plugin-react";
             import svgr from "vite-plugin-svgr";
-            export default defineConfig({ plugins: [react(), svgr()], server: { proxy: { "/api": "http://localhost:5000" } } });
+            import tailwindcss from "@tailwindcss/vite";
+            export default defineConfig({ plugins: [react(), svgr(), tailwindcss()], server: { proxy: { "/api": "http://localhost:5000" } } });
             """);
         Write("tsconfig.json", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }""");
         Write("tsconfig.app.json", """{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"] } }, "include": ["src"] }""");
@@ -127,6 +129,8 @@ public class ProjectImporterTests : IDisposable
             """);
         Write("src/lib/utils.ts", "export function cn() { return ''; }");
         Write("src/index.css", "body { margin: 0 }");
+        Write("src/Card.module.scss", ".card { color: red }");
+        Write("postcss.config.cjs", "module.exports = { plugins: { 'postcss-preset-mantine': {} } };");
         Write("src/vite-env.d.ts", "/// <reference types=\"vite/client\" />\n\ninterface ImportMetaEnv { readonly VITE_API_URL: string }\n");
         Write("public/vite.svg", "<svg/>");
         Write(".env", "VITE_API_URL=/api\nSECRET=do-not-ship\n");
@@ -146,16 +150,18 @@ public class ProjectImporterTests : IDisposable
 
         // date-fns is a devDependency in the source, but src/ imports it.
         Assert.Equal(["date-fns", "react", "react-dom"], plan.Dependencies.Keys);
-        Assert.Equal(["@types/react", "typescript"], plan.DevDependencies.Keys);
+        // Stylesheet tools run inside Nite, so they stay; Tailwind's Vite plugin is replaced.
+        Assert.Equal(["@types/react", "postcss", "postcss-preset-mantine", "sass-embedded", "tailwindcss", "typescript"], plan.DevDependencies.Keys);
         var skipped = plan.Skipped.ToDictionary(s => s.Name, s => s.Reason);
         Assert.Contains("registry", skipped["ui-kit"]);
-        Assert.Contains("Tailwind", skipped["tailwindcss"]);
+        Assert.Contains("Tailwind", skipped["@tailwindcss/vite"]);
         Assert.Contains("tooling", skipped["vite"]);
         Assert.Contains("tooling", skipped["eslint"]);
         Assert.Contains("tooling", skipped["vite-plugin-svgr"]);
 
         Assert.Contains(plan.Warnings, w => w.Contains("vite-plugin-svgr"));
-        Assert.Contains(plan.Warnings, w => w.Contains("Tailwind"));
+        Assert.DoesNotContain(plan.Warnings, w => w.Contains("tailwind", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(plan.Warnings, w => w.Contains("Sass") || w.Contains("CSS modules"));
         Assert.DoesNotContain(plan.Warnings, w => w.Contains("@/lib")); // the alias is not a package
         Assert.Contains(plan.Notes, n => n.Contains("proxy"));
         Assert.Contains(plan.Notes, n => n.Contains("Scripts"));
@@ -165,9 +171,42 @@ public class ProjectImporterTests : IDisposable
         Assert.Contains("Client/src/main.tsx", destinations);
         Assert.Contains("Client/src/lib/utils.ts", destinations);
         Assert.Contains("Client/tsconfig.app.json", destinations);
+        Assert.Contains("Client/postcss.config.cjs", destinations);
+        Assert.Contains("Client/src/Card.module.scss", destinations);
         Assert.Contains("wwwroot/vite.svg", destinations);
         Assert.Contains(".env", destinations);
         Assert.DoesNotContain(destinations, d => d.Contains("vite.config"));
+    }
+
+    [Fact]
+    public void Reads_sass_additional_data_from_vite_config()
+    {
+        // Mantine's Sass guide, verbatim.
+        var config = """
+            export default defineConfig({
+              plugins: [react()],
+              css: {
+                preprocessorOptions: {
+                  scss: {
+                    api: 'modern-compiler',
+                    additionalData: `@use "${path.join(process.cwd(), 'src/_mantine').replace(/\\/g, '/')}" as mantine;`,
+                  },
+                  less: { additionalData: '@import "./src/vars.less";' },
+                },
+              },
+            });
+            """;
+        var found = ProjectImporter.AdditionalData(config).ToList();
+        Assert.Equal(("scss", "@use \"src/_mantine\" as mantine;", true), found[0]);
+        Assert.Equal(("less", "@import \"./src/vars.less\";", true), found[1]);
+
+        var dynamic = ProjectImporter.AdditionalData("scss: { additionalData: `$theme: ${theme};` }").Single();
+        Assert.False(dynamic.Complete);
+
+        var plan = new ImportPlan { Source = "/x/app", Framework = ProjectImporter.Vite, ScssAdditionalData = "@use \"src/_mantine\" as mantine;" };
+        var json = ProjectImporter.NiteJson(plan);
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<NiteConfig>(json, NiteConfig.JsonOptions)!;
+        Assert.Equal("@use \"src/_mantine\" as mantine;", parsed.Css.PreprocessorOptions.Scss.AdditionalData);
     }
 
     [Fact]

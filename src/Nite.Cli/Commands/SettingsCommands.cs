@@ -179,7 +179,7 @@ internal sealed class CacheCleanCommand : Command
             Directory.Delete(target, recursive: true);
             Output.Hint($"removed {Markup.Escape(target)}");
         }
-        Output.Success($"Freed {freed / 1024.0 / 1024.0:0.0} MiB. Packages and esbuild download again on next use.");
+        Output.Success($"Freed {freed / 1024.0 / 1024.0:0.0} MiB. Packages, esbuild and the Sass compiler download again on next use.");
         return 0;
     }
 }
