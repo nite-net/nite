@@ -26,6 +26,14 @@ internal sealed class InitSettings : CommandSettings
     [Description("Reference a Nite source checkout instead of the NuGet package.")]
     public string? NiteSource { get; set; }
 
+    [CommandOption("--from <PATH>")]
+    [Description("Import an existing npm, yarn, pnpm or bun project (Vite or Create React App). The source is not changed.")]
+    public string? From { get; set; }
+
+    [CommandOption("--dry-run")]
+    [Description("With --from: show what would be imported, and write nothing.")]
+    public bool DryRun { get; set; }
+
     [CommandOption("--force")]
     [Description("Scaffold into a directory that already has files (existing files are never overwritten).")]
     public bool Force { get; set; }
@@ -39,9 +47,10 @@ internal sealed class InitSettings : CommandSettings
     public bool Verbose { get; set; }
 
     public override ValidationResult Validate() =>
-        Template is null || ProjectTemplates.Names.Contains(Template)
-            ? ValidationResult.Success()
-            : ValidationResult.Error($"Unknown template '{Template}'. Choose {string.Join(" or ", ProjectTemplates.Names)}.");
+        Template is not null && !ProjectTemplates.Names.Contains(Template) ? ValidationResult.Error($"Unknown template '{Template}'. Choose {string.Join(" or ", ProjectTemplates.Names)}.")
+        : From is not null && Template is not null ? ValidationResult.Error("--from imports a project, so --template does not apply.")
+        : DryRun && From is null ? ValidationResult.Error("--dry-run only applies with --from.")
+        : ValidationResult.Success();
 }
 
 /// <summary><c>nite init</c>: scaffolds a project, then installs its packages.</summary>
@@ -58,11 +67,16 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
         var name = settings.Name ?? new DirectoryInfo(directory).Name;
         var safeName = SafeProjectName(name);
 
-        if (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any(e => !IsIgnorable(e)) && !settings.Force)
+        if (settings.From is not null && Path.GetFullPath(settings.From) == directory)
+        {
+            throw new CliException("Import into a new directory: nite init <new-dir> --from <project>. The source project is left untouched.");
+        }
+
+        if (!settings.DryRun && Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any(e => !IsIgnorable(e)) && !settings.Force)
         {
             throw new CliException($"{Markup.Escape(Tooling.Relative(directory))} is not empty. Use --force to add a project to it anyway.");
         }
-        if (Directory.Exists(directory) && Directory.EnumerateFiles(directory, "*.csproj").FirstOrDefault() is { } existing)
+        if (!settings.DryRun && Directory.Exists(directory) && Directory.EnumerateFiles(directory, "*.csproj").FirstOrDefault() is { } existing)
         {
             throw new CliException($"{Markup.Escape(Tooling.Relative(directory))} already has {Markup.Escape(Path.GetFileName(existing))}.");
         }
@@ -74,6 +88,11 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             ["__NITE_REFERENCE__"] = NiteReference(directory, settings.NiteSource),
             ["__PORT__"] = Random.Shared.Next(5100, 5900).ToString(),
         };
+
+        if (settings.From is not null)
+        {
+            return await ImportRunner.RunAsync(settings, directory, safeName, replacements, cancellationToken);
+        }
 
         AnsiConsole.MarkupLine($"Creating [bold]{template}[/] project [bold]{Markup.Escape(safeName)}[/] in {Markup.Escape(Tooling.Relative(directory))}");
         foreach (var (file, content) in ProjectTemplates.For(template).OrderBy(f => f.Key, StringComparer.Ordinal))
@@ -149,7 +168,7 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             """;
     }
 
-    private static string Fill(string text, IReadOnlyDictionary<string, string> replacements) =>
+    internal static string Fill(string text, IReadOnlyDictionary<string, string> replacements) =>
         replacements.Aggregate(text, (current, pair) => current.Replace(pair.Key, pair.Value, StringComparison.Ordinal));
 
     private static bool IsIgnorable(string path) =>

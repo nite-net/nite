@@ -56,6 +56,10 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     private int _started;
     private FileSystemWatcher? _sourceWatcher;
     private FileSystemWatcher? _configWatcher;
+    private FileSystemWatcher? _envWatcher;
+    private readonly Timer _envTimer;
+    private volatile IReadOnlyList<string> _envDefines = [];
+    private volatile TsconfigPaths _aliases = new();
 
     public NiteDevServer(NiteProject project, HttpClient http, ILoggerFactory loggerFactory)
     {
@@ -66,6 +70,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         _changeTimer = new Timer(_ => _ = FlushChangesAsync());
         _reoptimizeTimer = new Timer(_ => _ = ReoptimizeAsync());
         _configTimer = new Timer(_ => _ = ReloadConfigAsync());
+        _envTimer = new Timer(_ => _ = ReloadEnvironmentAsync());
     }
 
     public bool IsDevelopment => true;
@@ -97,6 +102,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         _optimizer = new DependencyOptimizer(_esbuild, _loggerFactory.CreateLogger<DependencyOptimizer>());
 
         await InstallAsync();
+        LoadProjectInputs();
 
         // Compile everything once up front so the first page load already has every dependency
         // pre-bundled, instead of discovering them one reload at a time.
@@ -323,6 +329,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             ".ts" or ".mts" => "ts",
             ".jsx" => "jsx",
             ".json" => "json",
+            ".js" when _project.Config.JsxInJs => "jsx",
             _ => "js",
         };
 
@@ -332,6 +339,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             $"--sourcefile={Path.GetFileName(file)}", "--jsx=automatic", "--jsx-dev",
             $"--jsx-import-source={_project.Config.JsxImportSource}",
             "--define:process.env.NODE_ENV=\"development\"",
+            .. _envDefines,
         ]);
 
         var missing = new SortedSet<string>(StringComparer.Ordinal);
@@ -339,12 +347,13 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         var discovered = false;
         foreach (var specifier in ImportScanner.FindSpecifiers(result.Code))
         {
+            if (ResolveImport(file, specifier) is { } target)
+            {
+                imports.Add(target);
+                continue;
+            }
             if (!ImportScanner.IsBare(specifier))
             {
-                if (ResolveRelative(file, specifier) is { } target)
-                {
-                    imports.Add(target);
-                }
                 continue;
             }
 
@@ -415,7 +424,7 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     /// </summary>
     private string? ServedSpecifier(string importer, string specifier)
     {
-        if (ImportScanner.IsBare(specifier) || ResolveRelative(importer, specifier) is not { } target)
+        if (ResolveImport(importer, specifier) is not { } target)
         {
             return null;
         }
@@ -439,15 +448,29 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         return query.Count == 0 ? relative : relative + "?" + string.Join('&', query);
     }
 
-    private string? ResolveRelative(string importer, string specifier)
+    /// <summary>A relative import, or a tsconfig path alias (<c>@/components/x</c>), resolved to a client file.</summary>
+    private string? ResolveImport(string importer, string specifier)
     {
-        if (!specifier.StartsWith('.'))
-        {
-            return null;
-        }
         var pathPart = specifier.Split('?', '#')[0];
-        var target = ResolveModuleFile(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(importer)!, pathPart)));
+        var target = specifier.StartsWith('.')
+            ? ResolveModuleFile(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(importer)!, pathPart)))
+            : ImportScanner.IsBare(specifier) ? _aliases.Resolve(pathPart) : null;
         return target is not null && _project.IsInsideClientRoot(target) ? target : null;
+    }
+
+    /// <summary>Reads what compiled code depends on besides the source itself: path aliases and public env vars.</summary>
+    private void LoadProjectInputs()
+    {
+        _aliases = TsconfigPaths.Load(_project.ClientRoot);
+        _envDefines = NiteEnvironment.DefineFlags(_project, NiteEnvironment.Development);
+    }
+
+    private async Task ReloadEnvironmentAsync()
+    {
+        _logger.LogInformation("Environment files changed; recompiling");
+        LoadProjectInputs();
+        _modules.Clear();
+        await _hub.BroadcastAsync(new { type = "reload" });
     }
 
     /// <summary>Node-style file resolution: exact file, added extension, TS for .js, then index files.</summary>
@@ -534,6 +557,23 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
         _configWatcher.Created += onConfig;
         _configWatcher.Renamed += (_, _) => _configTimer.Change(200, Timeout.Infinite);
         _configWatcher.EnableRaisingEvents = true;
+
+        _envWatcher = new FileSystemWatcher(_project.Directory, ".env*")
+        {
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+        };
+        FileSystemEventHandler onEnv = (_, e) =>
+        {
+            if (NiteEnvironment.IsEnvFile(Path.GetFileName(e.FullPath)))
+            {
+                _envTimer.Change(150, Timeout.Infinite);
+            }
+        };
+        _envWatcher.Changed += onEnv;
+        _envWatcher.Created += onEnv;
+        _envWatcher.Deleted += onEnv;
+        _envWatcher.Renamed += (sender, e) => onEnv(sender, e);
+        _envWatcher.EnableRaisingEvents = true;
     }
 
     private void OnSourceChanged(string path)
@@ -561,6 +601,15 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
             }
             if (changed.Count == 0 || !_initialized)
             {
+                return;
+            }
+
+            if (changed.Any(p => Path.GetFileName(p).StartsWith("tsconfig", StringComparison.Ordinal) && p.EndsWith(".json", StringComparison.Ordinal)))
+            {
+                // Path aliases may have moved; every compiled module's imports could resolve differently.
+                LoadProjectInputs();
+                _modules.Clear();
+                await _hub.BroadcastAsync(new { type = "reload" });
                 return;
             }
 
@@ -936,6 +985,8 @@ public sealed class NiteDevServer : INiteAssets, IAsyncDisposable
     {
         NiteHotReload.Updated -= OnServerHotReload;
         _sourceWatcher?.Dispose();
+        _envWatcher?.Dispose();
+        await _envTimer.DisposeAsync();
         _configWatcher?.Dispose();
         await _changeTimer.DisposeAsync();
         await _reoptimizeTimer.DisposeAsync();

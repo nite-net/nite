@@ -68,6 +68,7 @@ internal static class ProjectTemplates
             node_modules/
             .nite/
             wwwroot/_nite/
+            .env*.local
 
             """,
         ["Client/tsconfig.json"] = """

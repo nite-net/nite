@@ -108,6 +108,16 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             "--define:process.env.NODE_ENV=\"production\"", "--conditions=production",
             "--loader:.json=json",
         };
+        flags.AddRange(NiteEnvironment.DefineFlags(project, NiteEnvironment.Production));
+        if (config.JsxInJs)
+        {
+            flags.Add("--loader:.js=jsx");
+        }
+        if (TsconfigPaths.Load(project.ClientRoot).SourceFile is { } aliasConfig)
+        {
+            // Vite projects keep paths in tsconfig.app.json, which esbuild would not find on its own.
+            flags.Add($"--tsconfig={aliasConfig}");
+        }
         flags.AddRange(AssetExtensions.Select(extension => $"--loader:{extension}=file"));
 
         var result = await esbuild.BuildAsync(new EsbuildBuildOptions

@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Nite\Nite.csproj" />
     <ProjectReference Include="..\..\src\Nite.Cli\Nite.Cli.csproj" />
   </ItemGroup>

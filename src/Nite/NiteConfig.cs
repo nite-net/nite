@@ -47,6 +47,16 @@ public sealed class NiteConfig
     public string JsxImportSource { get; init; } = "react";
 
     /// <summary>
+    /// Environment variables with these prefixes (from .env files or the environment) are inlined
+    /// into client code as <c>import.meta.env.KEY</c> and <c>process.env.KEY</c>. Others never
+    /// reach the browser. Imported Vite projects use <c>VITE_</c>, Create React App ones <c>REACT_APP_</c>.
+    /// </summary>
+    public List<string> EnvPrefix { get; init; } = ["NITE_PUBLIC_"];
+
+    /// <summary>Allow JSX in <c>.js</c> files, as Create React App does. Off by default, as in Vite.</summary>
+    public bool JsxInJs { get; init; }
+
+    /// <summary>
     /// React Fast Refresh in development: component edits update in place and keep state. Needs
     /// <c>react-refresh</c>, which Nite installs as a dev dependency when React is a dependency.
     /// </summary>

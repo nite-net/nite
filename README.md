@@ -51,6 +51,7 @@ Hot updates land in roughly 100 to 200 ms. A page of islands ships React and Rea
 dotnet tool install --global Nite.Cli    # the `nite` command
 
 nite init my-app                         # React SPA + minimal API (or: --template islands)
+nite init my-app --from ../vite-app      # ...or import an existing Vite / Create React App project
 cd my-app
 nite watch                               # dotnet watch, with Nite driving the browser
 nite add react-router                    # packages, pnpm style
@@ -142,6 +143,8 @@ gives a URL), as with Vite.
   "renderer": "react",             // island renderer, or a module exporting mount(el, Component, props)
   "jsxImportSource": "react",      // "preact" works too, with a custom renderer
   "fastRefresh": true,             // installs react-refresh as a dev dependency when React is used
+  "envPrefix": ["NITE_PUBLIC_"],   // env vars with these prefixes reach client code (see below)
+  "jsxInJs": false,                // allow JSX in .js files (Create React App style)
   "target": "es2022",
   "dependencies": { "react": "^19.3.1", "react-dom": "^19.3.1" },
   "devDependencies": { "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0" }
@@ -155,6 +158,49 @@ Commit `nite.lock.json`.
 `dotnet publish` runs `nite build` through the targets in the Nite package, using the `nite` tool.
 Set `NiteCommand` (for example to `dotnet tool run nite` for a local tool), or `NiteBuildEnabled`
 to `false` to skip it.
+
+### Environment variables and path aliases
+
+Variables from `.env`, `.env.local`, `.env.development` / `.env.production` (and their `.local`
+variants) in the project folder, and from the process environment, are inlined into client code
+**only if** their name starts with an `envPrefix` (default `NITE_PUBLIC_`). Code reads them as
+`import.meta.env.NITE_PUBLIC_API` (with `MODE`, `DEV`, `PROD` and `BASE_URL` alongside, as in Vite)
+or `process.env.NITE_PUBLIC_API` (as in Create React App). Anything else in `.env`, such as database
+passwords, never reaches the browser. Editing a `.env` file reloads the page with the new values.
+
+`compilerOptions.paths` in the client's tsconfig (following `extends` and Vite's `references` to
+`tsconfig.app.json`) work in development and production, so `import { cn } from "@/lib/utils"`
+resolves as it does in your editor.
+
+## Importing an existing project
+
+```bash
+nite init my-app --from ../vite-app --dry-run   # see what would happen
+nite init my-app --from ../vite-app             # do it (the source is never modified)
+```
+
+Works with **Vite** (React) and **Create React App** projects managed by npm, Yarn (classic or
+Berry), pnpm or Bun. Nite reads the project and:
+
+- Copies `index.html` and `src/` into `Client/`, `public/` into `wwwroot/`, tsconfig files into
+  `Client/`, and `.env*` files into the project.
+- Keeps **the exact versions the project runs today**: it reads `package-lock.json`, `yarn.lock`,
+  `pnpm-lock.yaml` or `bun.lock` and prefers those versions while resolving (the binary
+  `bun.lockb` is not read; run `bun install --save-text-lockfile` first).
+- Imports runtime `dependencies`, plus any devDependency that `src/` actually imports (bundlers
+  never cared which list a library was in), plus `@types/*` and `typescript`. Build, lint and test
+  tooling (Vite, Babel, ESLint, oxlint, Jest, Vitest, testing libraries…) is skipped, as are
+  `file:`, `workspace:`, git and URL dependencies. Imports from test files do not count.
+- Sets `envPrefix` (`VITE_` or `REACT_APP_`, or `envPrefix` from vite.config), turns on `jsxInJs`
+  for Create React App, rewrites `public/index.html`'s `%PUBLIC_URL%` and adds its entry script,
+  and swaps the `vite/client` / `react-scripts` types for Nite's (`nite-env.d.ts`).
+- Reports what it could not bring along: Vite plugins other than React's, Tailwind, CSS modules,
+  Sass/Less, `import.meta.glob`, `?raw`/`?url`/`?worker` imports, SVGs as React components (svgr),
+  `overrides`/`resolutions`, and package.json scripts. The dev `proxy` is not needed: the app and
+  its API share an origin.
+
+Monorepos (`workspaces`) are refused; import one app at a time with `--from <repo>/packages/<app>`.
+Next.js, Remix and Astro apps have their own servers and are out of scope.
 
 ## Full-stack dev with `nite watch`
 
@@ -196,7 +242,7 @@ The event never fires in production, so this costs nothing there.
 
 | Command | Aliases | What it does |
 |---|---|---|
-| `nite init [dir]` | | Scaffold a project: `--template spa` (default) or `islands`, `--name`, `--nite-source <repo>`, `--no-install`. |
+| `nite init [dir]` | | Scaffold a project: `--template spa` (default) or `islands`, `--name`, `--nite-source <repo>`, `--no-install`. `--from <project>` imports an existing Vite or Create React App project instead (`--dry-run` to preview). |
 | `nite install [pkg...]` | `add`, `i` | No arguments: install everything in `nite.json`. With packages (`react`, `react@^19`, `@types/node@latest`): add them, then install. `-D` for devDependencies, `-E` to pin exactly. |
 | `nite remove <pkg...>` | `rm`, `delete`, `uninstall` | Remove from `nite.json` and `node_modules`. |
 | `nite list` | `ls` | Direct packages with their ranges and installed versions; `--all` adds transitive ones. |
@@ -269,8 +315,9 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
   server-side picture.
 - **Registry packages only**: no git, `file:` or `npm:` alias dependencies. Optional dependencies
   are skipped and install scripts never run, so packages that need a postinstall step won't work.
-- `tsconfig` `paths` aliases, CSS `url()` rewriting in dev, and CSS from inside npm packages are
-  not handled yet.
+- **Not yet:** CSS modules (`*.module.css`), Sass/Less, Tailwind's build step, `import.meta.glob`,
+  Vite's `?raw`/`?url`/`?worker` imports, CSS `url()` rewriting in dev, and CSS shipped inside npm
+  packages. The importer warns about each of these when a project uses them.
 - Production asset URLs assume the app is served from the site root (`/_nite/...`), except in
   HTML served by `MapNiteSpa`, which adds the request's path base. Hashed bundles are revalidated
   with ETags rather than cached as immutable.

@@ -101,6 +101,22 @@ public class ReactRefreshTests
         Assert.False(info.IsBoundary);
     }
 
+    [Theory]
+    // export default App (Vite's and CRA's templates): esbuild aliases the component.
+    [InlineData("function App() {\n  return /* @__PURE__ */ jsxDEV(\"div\", {});\n}\nvar App_default = App;\nexport {\n  App_default as default\n};\n", true)]
+    // export default function () { … } with JSX
+    [InlineData("function Card_default() {\n  return /* @__PURE__ */ jsx(\"div\", {});\n}\nexport {\n  Card_default as default\n};\n", true)]
+    // export default memo(function Item() { … })
+    [InlineData("var Item_default = memo(function Item() {\n  return /* @__PURE__ */ jsx(\"div\", {});\n});\nexport {\n  Item_default as default\n};\n", true)]
+    // an anonymous default *utility* must keep propagating to its importers
+    [InlineData("function format_default(x) {\n  return x.trim();\n}\nexport {\n  format_default as default\n};\n", false)]
+    // an alias of something that is not a component
+    [InlineData("const config = { a: 1 };\nvar config_default = config;\nexport {\n  config_default as default\n};\n", false)]
+    public void Understands_default_export_shapes(string code, bool isBoundary)
+    {
+        Assert.Equal(isBoundary, ReactRefresh.Analyze(code).IsBoundary);
+    }
+
     [Fact]
     public void Footer_goes_before_the_source_map_comment()
     {

@@ -38,7 +38,12 @@ public sealed class PackageInstaller
     /// collection means all of them. When null, versions already in the lockfile are kept wherever
     /// they still satisfy their ranges, and the lockfile is only re-resolved if nite.json changed.
     /// </param>
-    public async Task<NiteLockFile> InstallAsync(string projectDirectory, NiteConfig config, CancellationToken cancellationToken = default, IReadOnlyCollection<string>? update = null)
+    /// <param name="seedVersions">
+    /// Versions to prefer on top of the lockfile's, such as those an imported project's own
+    /// lockfile (package-lock.json, yarn.lock…) recorded.
+    /// </param>
+    public async Task<NiteLockFile> InstallAsync(string projectDirectory, NiteConfig config, CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? update = null, IReadOnlyDictionary<string, HashSet<string>>? seedVersions = null)
     {
         // The dev server and `nite install` may run at once; only one of them may touch node_modules.
         await using var installLock = await AcquireInstallLockAsync(projectDirectory, cancellationToken);
@@ -57,6 +62,10 @@ public sealed class PackageInstaller
 
             // Versions to keep: everything already locked, minus whatever is being updated.
             var preferred = new Dictionary<string, List<SemVersion>>(StringComparer.Ordinal);
+            foreach (var (name, versions) in seedVersions ?? new Dictionary<string, HashSet<string>>())
+            {
+                preferred[name] = versions.Select(v => SemVersion.TryParse(v, out var parsed) ? parsed : null).OfType<SemVersion>().ToList();
+            }
             if (lockFile is not null && update is not { Count: 0 })
             {
                 foreach (var (location, package) in lockFile.Packages)
@@ -66,11 +75,11 @@ public sealed class PackageInstaller
                     {
                         continue;
                     }
-                    if (!preferred.TryGetValue(name, out var versions))
+                    if (!preferred.TryGetValue(name, out var locked))
                     {
-                        preferred[name] = versions = [];
+                        preferred[name] = locked = [];
                     }
-                    versions.Add(version);
+                    locked.Add(version);
                 }
             }
 

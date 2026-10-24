@@ -18,23 +18,28 @@ internal static partial class ReactRefresh
     public static RefreshInfo Analyze(string code)
     {
         var components = new List<RefreshComponent>();
-        var nonComponents = new HashSet<string>(StringComparer.Ordinal);
+        var aliases = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var (name, kind, text) in TopLevelDeclarations(code))
+        foreach (var (name, kind, text, init) in TopLevelDeclarations(code))
         {
-            if (IsComponentName(name) && kind is DeclarationKind.Function or DeclarationKind.ComponentLike)
+            var isFunctionLike = kind is DeclarationKind.Function or DeclarationKind.ComponentLike;
+            // esbuild names anonymous default exports "<file>_default"; count them when they render JSX,
+            // so an anonymous default utility still propagates to its importers.
+            var isAnonymousDefault = name.EndsWith("_default", StringComparison.Ordinal) && JsxCall().IsMatch(text);
+            if (isFunctionLike && (IsComponentName(name) || isAnonymousDefault))
             {
                 var hooks = HookCall().Matches(text).Select(m => m.Groups["hook"].Value);
                 components.Add(new RefreshComponent(name, string.Join(',', hooks)));
             }
-            else
+            else if (AliasInitializer().Match(init) is { Success: true } alias && components.Any(c => c.Name == alias.Groups[1].Value))
             {
-                nonComponents.Add(name);
+                // `export default App` becomes `var App_default = App;`: the same component under another name.
+                aliases.Add(name);
             }
         }
 
         var exports = ExportedLocals(code, out var hasStarExport);
-        var componentNames = components.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        var componentNames = components.Select(c => c.Name).Concat(aliases).ToHashSet(StringComparer.Ordinal);
         var isBoundary = components.Count > 0 && exports.Count > 0 && !hasStarExport && exports.All(componentNames.Contains);
         return new RefreshInfo(components, isBoundary);
     }
@@ -68,7 +73,7 @@ internal static partial class ReactRefresh
     private static bool IsComponentName(string name) =>
         char.IsUpper(name[0]) && name.Any(char.IsLower);
 
-    private static IEnumerable<(string Name, DeclarationKind Kind, string Text)> TopLevelDeclarations(string code)
+    private static IEnumerable<(string Name, DeclarationKind Kind, string Text, string Init)> TopLevelDeclarations(string code)
     {
         var lines = code.Split('\n');
         for (var i = 0; i < lines.Length; i++)
@@ -91,7 +96,7 @@ internal static partial class ReactRefresh
                 : match.Groups["class"].Success ? DeclarationKind.Other
                 : ComponentInitializer().IsMatch(match.Groups["init"].Value) ? DeclarationKind.ComponentLike
                 : DeclarationKind.Other;
-            yield return (match.Groups["name"].Value, kind, text);
+            yield return (match.Groups["name"].Value, kind, text, match.Groups["init"].Value.Trim());
         }
     }
 
@@ -123,6 +128,12 @@ internal static partial class ReactRefresh
     // Arrow functions, function expressions and the usual component wrappers.
     [GeneratedRegex(@"^(?:/\*\s*@__PURE__\s*\*/\s*)?(?:async\s+)?(?:\(|[A-Za-z_$][\w$]*\s*=>|function\b|(?:React\.)?(?:memo|forwardRef)\s*\()")]
     private static partial Regex ComponentInitializer();
+
+    [GeneratedRegex(@"^([A-Za-z_$][\w$]*);?$")]
+    private static partial Regex AliasInitializer();
+
+    [GeneratedRegex(@"\bjsx(?:DEV|s)?\s*\(")]
+    private static partial Regex JsxCall();
 
     [GeneratedRegex(@"\b(?<hook>use[A-Z0-9]\w*|use)\s*\(")]
     private static partial Regex HookCall();
