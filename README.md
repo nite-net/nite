@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="(n)ite" width="360">
+</p>
+
 # nite
 
 TypeScript and React for ASP.NET Core with a Vite-style dev loop and no Node.js toolchain.
