@@ -20,4 +20,9 @@
     <InternalsVisibleTo Include="Nite.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- NuGet imports build/<PackageId>.targets into consuming projects automatically. -->
+    <None Include="..\..\build\Nite.targets" Pack="true" PackagePath="build\Nite.targets" Visible="false" />
+  </ItemGroup>
+
 </Project>

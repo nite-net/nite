@@ -47,17 +47,23 @@ Hot updates land in roughly 100 to 200 ms. A page of islands ships React and Rea
 
 ## Getting started
 
-The repository holds the library (`src/Nite`), the CLI (`src/Nite.Cli`), two samples and tests.
-There are no NuGet packages yet, so reference the projects directly, as the samples do.
+```bash
+dotnet tool install --global Nite.Cli    # the `nite` command
+
+nite init my-app                         # React SPA + minimal API (or: --template islands)
+cd my-app
+nite watch                               # dotnet watch, with Nite driving the browser
+nite add react-router                    # packages, pnpm style
+dotnet publish -c Release                # runs `nite build`, ships wwwroot/_nite
+```
+
+The packages are not on NuGet yet. Until they are, build from this repository and point new
+projects at it: `nite init my-app --nite-source path/to/nite` (run the CLI with
+`dotnet run --project src/Nite.Cli --`). The samples work the same way:
 
 ```bash
-cd samples/Nite.Spa            # React SPA + minimal API
-DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1 dotnet watch    # see "Full-stack dev with dotnet watch"
-
-cd samples/Nite.Sample         # Razor Pages with React islands
-dotnet watch
-
-dotnet publish -c Release      # either sample: runs `nite build`, ships wwwroot/_nite
+cd samples/Nite.Spa && nite watch                        # React SPA + minimal API
+cd samples/Nite.Sample && nite watch --browser-refresh   # Razor Pages with React islands
 ```
 
 The first run downloads esbuild and the packages in `nite.json` (a few seconds); after that,
@@ -142,13 +148,17 @@ gives a URL), as with Vite.
 }
 ```
 
-Edit `dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
-Commit `nite.lock.json`. For `dotnet publish`, import `build/Nite.targets` and set `NiteCliPath`
-(see either sample's `.csproj`).
+Use `nite add` / `nite rm` rather than editing by hand (comments in the file are kept), or edit
+`dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
+Commit `nite.lock.json`.
 
-## Full-stack dev with `dotnet watch`
+`dotnet publish` runs `nite build` through the targets in the Nite package, using the `nite` tool.
+Set `NiteCommand` (for example to `dotnet tool run nite` for a local tool), or `NiteBuildEnabled`
+to `false` to skip it.
 
-`dotnet watch` handles the C# side and Nite handles the client side:
+## Full-stack dev with `nite watch`
+
+`nite watch` runs `dotnet watch`: it handles the C# side and Nite handles the client side.
 
 | You edit | What happens |
 |---|---|
@@ -159,16 +169,14 @@ Commit `nite.lock.json`. For `dotnet publish`, import `build/Nite.targets` and s
 | C# that hot reload can apply | Applied in the running app; the browser gets a `nite:server-update` event. |
 | C# that needs a restart (new endpoint in `Program.cs`, say) | dotnet watch restarts the app; the page waits for it and reloads (about 10 s). |
 
-`dotnet watch` injects its own browser script, which reloads the page after **every** C# change.
-That suits Razor pages, but in a single-page app it throws away client state for an API-only
-change. Turn it off, and Nite takes over (it reloads after restarts by itself):
+Plain `dotnet watch` injects its own browser script, which reloads the page after **every** C#
+change. That suits Razor pages, but in a single-page app it throws away client state for an
+API-only change. `nite watch` turns it off (`DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1`, which only
+works from the environment, not `launchSettings.json`) and Nite takes over, reloading after
+restarts by itself. For Razor pages, keep dotnet's refresh with `nite watch --browser-refresh`.
+Arguments after `--` go to dotnet watch: `nite watch -- --launch-profile https`.
 
-```bash
-DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1 dotnet watch
-```
-
-(It has to be set in the shell: `dotnet watch` reads it from its own environment, not from
-`launchSettings.json`.) Then let pages re-fetch when server code changes:
+Let pages re-fetch when server code changes:
 
 ```ts
 export function onServerUpdate(callback: () => void) {
@@ -186,10 +194,22 @@ The event never fires in production, so this costs nothing there.
 
 ## CLI
 
-```bash
-dotnet run --project src/Nite.Cli -- install [project-dir]   # node_modules + nite.lock.json
-dotnet run --project src/Nite.Cli -- build   [project-dir]   # production build into wwwroot/_nite
-```
+| Command | Aliases | What it does |
+|---|---|---|
+| `nite init [dir]` | | Scaffold a project: `--template spa` (default) or `islands`, `--name`, `--nite-source <repo>`, `--no-install`. |
+| `nite install [pkg...]` | `add`, `i` | No arguments: install everything in `nite.json`. With packages (`react`, `react@^19`, `@types/node@latest`): add them, then install. `-D` for devDependencies, `-E` to pin exactly. |
+| `nite remove <pkg...>` | `rm`, `delete`, `uninstall` | Remove from `nite.json` and `node_modules`. |
+| `nite list` | `ls` | Direct packages with their ranges and installed versions; `--all` adds transitive ones. |
+| `nite update [pkg...]` | `up` | Show current, wanted and latest versions, then update within the ranges. `--check` only reports; `--latest` moves the ranges to the latest versions. |
+| `nite build` | | Production build into `wwwroot/_nite` (publish runs this). |
+| `nite watch` | | `dotnet watch` with Nite handling the browser; see above. |
+| `nite version` | `--version` | The Nite version (and esbuild and .NET versions). |
+| `nite update-self` | | `dotnet tool update Nite.Cli`, for however nite is installed: local tool manifest, global, or `--tool-path`. |
+
+Project commands work on the current directory; `-C <dir>` points them elsewhere, and
+`--verbose` shows debug output. Installs keep the versions already in `nite.lock.json` unless a
+range forces a change, so adding one package never upgrades the others; that's what
+`nite update` is for.
 
 ## Limits and non-goals
 
@@ -224,3 +244,7 @@ dotnet test --filter "Category!=Integration"         # offline
 
 Environment variables: `NITE_CACHE_DIR` moves the per-user cache (esbuild binary and tarballs);
 `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2).
+
+## License
+
+[Apache License 2.0](LICENSE).

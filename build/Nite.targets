@@ -6,13 +6,20 @@
 
     Properties:
       NiteBuildEnabled  true/false. Defaults to true for Release builds.
-      NiteCliPath       Path to Nite.Cli.dll (the Nite.Cli project's output).
+      NiteCliPath       Path to Nite.Cli.dll, for building against a Nite source checkout.
+      NiteCommand       Command that runs the CLI. Defaults to `nite` (the global tool), or to
+                        Nite.Cli.dll when NiteCliPath is set. Use `dotnet tool run nite` for a
+                        local tool.
+
+    The Nite NuGet package imports this file automatically.
   -->
   <PropertyGroup>
     <NiteBuildEnabled Condition="'$(NiteBuildEnabled)' == '' and '$(Configuration)' == 'Release'">true</NiteBuildEnabled>
     <NiteClientRoot Condition="'$(NiteClientRoot)' == ''">Client</NiteClientRoot>
     <NiteDotnet Condition="'$(NiteDotnet)' == '' and '$(DOTNET_HOST_PATH)' != ''">$(DOTNET_HOST_PATH)</NiteDotnet>
     <NiteDotnet Condition="'$(NiteDotnet)' == ''">dotnet</NiteDotnet>
+    <NiteCommand Condition="'$(NiteCommand)' == '' and '$(NiteCliPath)' != ''">&quot;$(NiteDotnet)&quot; &quot;$(NiteCliPath)&quot;</NiteCommand>
+    <NiteCommand Condition="'$(NiteCommand)' == ''">nite</NiteCommand>
     <DefaultItemExcludes>$(DefaultItemExcludes);node_modules/**;.nite/**</DefaultItemExcludes>
   </PropertyGroup>
 
@@ -35,10 +42,10 @@
           AfterTargets="ResolveProjectReferences"
           BeforeTargets="ResolveStaticWebAssetsConfiguration;AssignTargetPaths"
           Condition="'$(NiteBuildEnabled)' == 'true'">
-    <Error Condition="'$(NiteCliPath)' == '' or !Exists('$(NiteCliPath)')"
+    <Error Condition="'$(NiteCliPath)' != '' and !Exists('$(NiteCliPath)')"
            Text="Nite: NiteCliPath ('$(NiteCliPath)') does not point to Nite.Cli.dll. Build Nite.Cli or set NiteCliPath." />
 
-    <Exec Command="&quot;$(NiteDotnet)&quot; &quot;$(NiteCliPath)&quot; build &quot;$(MSBuildProjectDirectory)&quot;" />
+    <Exec Command="$(NiteCommand) build --dir &quot;$(MSBuildProjectDirectory)&quot;" />
 
     <ItemGroup>
       <Content Include="wwwroot/_nite/**" CopyToPublishDirectory="PreserveNewest" />

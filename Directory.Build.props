@@ -3,6 +3,8 @@
   <PropertyGroup>
     <Version>0.1.0</Version>
     <Authors>Tim McQueen</Authors>
+    <Copyright>Copyright Tim McQueen</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/tmcqueen/nite</RepositoryUrl>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>

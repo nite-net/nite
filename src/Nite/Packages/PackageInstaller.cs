@@ -32,7 +32,12 @@ public sealed class PackageInstaller
 
     /// <summary>Makes <c>node_modules</c> match the lockfile, resolving a new lockfile if needed.</summary>
     /// <returns>The lockfile that is now installed.</returns>
-    public async Task<NiteLockFile> InstallAsync(string projectDirectory, NiteConfig config, CancellationToken cancellationToken = default)
+    /// <param name="update">
+    /// Packages to move to the newest versions their ranges allow (<c>nite update</c>); an empty
+    /// collection means all of them. When null, versions already in the lockfile are kept wherever
+    /// they still satisfy their ranges, and the lockfile is only re-resolved if nite.json changed.
+    /// </param>
+    public async Task<NiteLockFile> InstallAsync(string projectDirectory, NiteConfig config, CancellationToken cancellationToken = default, IReadOnlyCollection<string>? update = null)
     {
         // The dev server and `nite install` may run at once; only one of them may touch node_modules.
         await using var installLock = await AcquireInstallLockAsync(projectDirectory, cancellationToken);
@@ -42,13 +47,33 @@ public sealed class PackageInstaller
         var requires = new SortedDictionary<string, string>(config.AllDependencies.ToDictionary(), StringComparer.Ordinal);
 
         var lockFile = NiteLockFile.TryLoad(lockPath);
-        if (lockFile is null || !lockFile.Requires.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(requires))
+        if (update is not null || lockFile is null || !lockFile.Requires.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(requires))
         {
             if (requires.Count > 0)
             {
                 _logger.LogInformation("Resolving {Count} package(s) from {Registry}", requires.Count, config.Registry);
             }
-            lockFile = await ResolveAsync(registry, requires, cancellationToken);
+
+            // Versions to keep: everything already locked, minus whatever is being updated.
+            var preferred = new Dictionary<string, List<SemVersion>>(StringComparer.Ordinal);
+            if (lockFile is not null && update is not { Count: 0 })
+            {
+                foreach (var (location, package) in lockFile.Packages)
+                {
+                    var name = PackageNameAt(location);
+                    if (update?.Contains(name) == true || !SemVersion.TryParse(package.Version, out var version))
+                    {
+                        continue;
+                    }
+                    if (!preferred.TryGetValue(name, out var versions))
+                    {
+                        preferred[name] = versions = [];
+                    }
+                    versions.Add(version);
+                }
+            }
+
+            lockFile = await ResolveAsync(registry, requires, preferred, cancellationToken);
             lockFile.Save(lockPath);
         }
 
@@ -56,7 +81,8 @@ public sealed class PackageInstaller
         return lockFile;
     }
 
-    private async Task<NiteLockFile> ResolveAsync(NpmRegistry registry, IReadOnlyDictionary<string, string> requires, CancellationToken cancellationToken)
+    private async Task<NiteLockFile> ResolveAsync(NpmRegistry registry, IReadOnlyDictionary<string, string> requires,
+        IReadOnlyDictionary<string, List<SemVersion>> preferred, CancellationToken cancellationToken)
     {
         var placed = new SortedDictionary<string, NiteLockedPackage>(StringComparer.Ordinal);
         var queue = new Queue<(string Parent, string Name, string Range, bool IsPeer)>();
@@ -95,7 +121,8 @@ public sealed class PackageInstaller
             var versions = packument.Versions.Keys
                 .Select(v => SemVersion.TryParse(v, out var parsed) ? parsed : null)
                 .OfType<SemVersion>();
-            var chosen = range.MaxSatisfying(versions)
+            var chosen = (preferred.TryGetValue(name, out var kept) ? range.MaxSatisfying(kept) : null)
+                ?? range.MaxSatisfying(versions)
                 ?? throw new NitePackageException($"No version of '{name}' satisfies '{rangeText}'.");
             var manifest = packument.Versions[chosen.ToString()];
 
@@ -181,7 +208,7 @@ public sealed class PackageInstaller
 
         if (installed > 0)
         {
-            _logger.LogInformation("Installed {Count} package(s) into {Directory}", installed, nodeModules);
+            _logger.LogInformation("Installed {Count} package(s) into node_modules", installed);
         }
 
         Directory.CreateDirectory(nodeModules);
