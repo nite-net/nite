@@ -23,23 +23,7 @@ public sealed class NiteHeadTagHelper(INiteAssets assets) : TagHelper
     {
         output.TagName = null;
         var head = await assets.GetHeadAsync(ViewContext.HttpContext);
-        var html = output.Content;
-
-        if (head.ImportMap is { Count: > 0 } imports)
-        {
-            // System.Text.Json escapes '<' and friends, so this cannot close the script element early.
-            html.AppendHtml("<script type=\"importmap\">")
-                .AppendHtml(JsonSerializer.Serialize(new { imports }))
-                .AppendHtml("</script>\n");
-        }
-        foreach (var preload in head.Preloads)
-        {
-            html.AppendHtml($"<link rel=\"modulepreload\" href=\"{HtmlEncoder.Default.Encode(preload)}\">\n");
-        }
-        foreach (var script in head.Scripts)
-        {
-            html.AppendHtml($"<script type=\"module\" src=\"{HtmlEncoder.Default.Encode(script)}\"></script>\n");
-        }
+        output.Content.AppendHtml(head.ToHtml());
     }
 }
 

@@ -1,7 +1,10 @@
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Nite.Esbuild;
+using Nite.Html;
 using Nite.Runtime;
 
 namespace Nite.Build;
@@ -30,7 +33,8 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             entries[project.RelativeToClientRoot(file)] = (file, "islands/" + name);
         }
 
-        foreach (var entry in config.Entries)
+        var htmlPages = HtmlEntries(project);
+        foreach (var entry in config.Entries.Where(e => !e.EndsWith(".html", StringComparison.OrdinalIgnoreCase)))
         {
             var file = project.ResolveClientPath(entry) is { } path ? Dev.NiteDevServer.ResolveModuleFile(path) : null;
             if (file is null)
@@ -39,6 +43,31 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             }
             var key = project.RelativeToClientRoot(file);
             entries.TryAdd(key, (file, NitePaths.ToUrlPath(Path.ChangeExtension(key, null))));
+        }
+
+        // Module scripts and stylesheets referenced by HTML pages are entries too.
+        var htmlReferences = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        foreach (var (page, html) in htmlPages)
+        {
+            var references = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var reference in HtmlDocument.FindReferences(html))
+            {
+                var local = HtmlDocument.ResolveLocal(page, reference.Url);
+                var target = local is null ? null : project.ResolveClientPath(local);
+                if (target is null)
+                {
+                    continue;
+                }
+                var file = reference.Kind == HtmlReferenceKind.ModuleScript ? Dev.NiteDevServer.ResolveModuleFile(target) : File.Exists(target) ? target : null;
+                if (file is null)
+                {
+                    throw new InvalidOperationException($"{page} references '{reference.Url}', which was not found.");
+                }
+                var key = project.RelativeToClientRoot(file);
+                entries.TryAdd(key, (file, NitePaths.ToUrlPath(Path.ChangeExtension(key, null))));
+                references[reference.Url] = key;
+            }
+            htmlReferences[page] = references;
         }
 
         if (islands.Count > 0)
@@ -64,7 +93,7 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
 
         if (entries.Count == 0)
         {
-            _logger.LogWarning("Nothing to build: no islands in {Islands} and no \"entries\" in nite.json", project.IslandsDirectory);
+            _logger.LogWarning("Nothing to build: no islands in {Islands}, no index.html and no \"entries\" in nite.json", project.IslandsDirectory);
             await File.WriteAllTextAsync(Path.Combine(project.OutputDirectory, NiteManifest.FileName), manifest.ToJson(), cancellationToken);
             return manifest;
         }
@@ -125,6 +154,15 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             };
         }
 
+        foreach (var (page, html) in htmlPages)
+        {
+            var output = RewriteHtml(page, html, htmlReferences[page], manifest);
+            var outputPath = Path.Combine(project.OutputDirectory, page);
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            await File.WriteAllTextAsync(outputPath, output, cancellationToken);
+            manifest.Html[page] = page;
+        }
+
         await File.WriteAllTextAsync(Path.Combine(project.OutputDirectory, NiteManifest.FileName), manifest.ToJson(), cancellationToken);
 
         var size = Directory.EnumerateFiles(project.OutputDirectory, "*", SearchOption.AllDirectories)
@@ -135,6 +173,61 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null)
             System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return manifest;
     }
+
+    /// <summary><c>index.html</c> at the client root (if any) plus HTML pages listed in <c>entries</c>.</summary>
+    private static List<(string Page, string Html)> HtmlEntries(NiteProject project)
+    {
+        var pages = project.Config.Entries
+            .Where(e => e.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+            .Select(e => NitePaths.ToUrlPath(e).TrimStart('/'))
+            .ToList();
+        if (File.Exists(Path.Combine(project.ClientRoot, "index.html")) && !pages.Contains("index.html"))
+        {
+            pages.Insert(0, "index.html");
+        }
+
+        return pages.Select(page =>
+        {
+            var file = project.ResolveClientPath(page);
+            if (file is null || !File.Exists(file))
+            {
+                throw new InvalidOperationException($"HTML entry '{page}' from nite.json was not found in {project.ClientRoot}.");
+            }
+            return (project.RelativeToClientRoot(file), File.ReadAllText(file));
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Points an HTML page at the built files: each module script becomes its hashed bundle (with
+    /// modulepreload hints for its chunks and links for its CSS), each stylesheet its hashed copy.
+    /// URLs are root-relative under <c>/_nite</c>; the SPA endpoint adds PathBase when serving.
+    /// </summary>
+    private static string RewriteHtml(string page, string html, Dictionary<string, string> references, NiteManifest manifest) =>
+        HtmlDocument.Rewrite(html, reference =>
+        {
+            if (!references.TryGetValue(reference.Url, out var key) || !manifest.Entries.TryGetValue(key, out var entry))
+            {
+                return null;
+            }
+
+            string Url(string path) => HtmlEncoder.Default.Encode($"{NiteProject.BasePath}/{path}");
+            if (reference.Kind == HtmlReferenceKind.Stylesheet)
+            {
+                return $"<link rel=\"stylesheet\" href=\"{Url(entry.File)}\">";
+            }
+
+            var tags = new StringBuilder();
+            foreach (var css in entry.Css)
+            {
+                tags.Append($"<link rel=\"stylesheet\" href=\"{Url(css)}\">\n");
+            }
+            foreach (var chunk in entry.Imports)
+            {
+                tags.Append($"<link rel=\"modulepreload\" href=\"{Url(chunk)}\">\n");
+            }
+            tags.Append($"<script type=\"module\" src=\"{Url(entry.File)}\"></script>");
+            return tags.ToString();
+        });
 
     /// <summary>Every chunk an output imports statically, directly or through other chunks.</summary>
     private static IEnumerable<string> StaticImports(JsonElement outputs, string outputPath)

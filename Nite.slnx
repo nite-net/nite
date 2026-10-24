@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/Nite.Sample/Nite.Sample.csproj" />
+    <Project Path="samples/Nite.Spa/Nite.Spa.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Nite.Cli/Nite.Cli.csproj" />

@@ -18,6 +18,9 @@ public sealed class NiteManifest
     /// <summary>Island name → entry key.</summary>
     public Dictionary<string, string> Islands { get; init; } = [];
 
+    /// <summary>HTML entry (relative to the client root) → built page (relative to <c>/_nite/</c>).</summary>
+    public Dictionary<string, string> Html { get; init; } = [];
+
     /// <summary>Entry key (source path relative to the client root) → output.</summary>
     public Dictionary<string, NiteManifestEntry> Entries { get; init; } = [];
 

@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -73,6 +75,36 @@ public static class NiteExtensions
             branch.Run(server.HandleAsync);
         });
         return app;
+    }
+
+    /// <summary>
+    /// Serves an HTML entry from the client root (default <c>index.html</c>) for <c>/</c> and, as a
+    /// fallback, for any other path without a file extension, so client-side routes survive a
+    /// refresh. Real endpoints always win. Requests under <paramref name="apiPrefix"/> never fall
+    /// back, so a mistyped API call gets a 404 instead of a page of HTML.
+    /// </summary>
+    /// <remarks>
+    /// In development the page is read from source on every request with the dev client injected;
+    /// in production it is the built copy from <c>wwwroot/_nite</c>.
+    /// </remarks>
+    public static IEndpointConventionBuilder MapNiteSpa(this IEndpointRouteBuilder endpoints, string page = "index.html", string? apiPrefix = "/api")
+    {
+        return endpoints.MapFallback(async context =>
+        {
+            if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method)
+                || (apiPrefix is not null && context.Request.Path.StartsWithSegments(apiPrefix)))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var assets = context.RequestServices.GetRequiredService<INiteAssets>();
+            var html = await assets.GetHtmlAsync(page, context);
+            // Never cache the page itself: it is what points at the current hashed bundles.
+            context.Response.Headers.CacheControl = "no-cache";
+            context.Response.ContentType = "text/html; charset=utf-8";
+            await context.Response.WriteAsync(html);
+        });
     }
 
     private static bool IsDevelopment(IServiceProvider services)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Nite.Build;
@@ -8,6 +9,7 @@ namespace Nite.Assets;
 public sealed class ProductionAssets(IWebHostEnvironment environment) : INiteAssets
 {
     private readonly Lazy<NiteManifest> _manifest = new(() => Load(environment));
+    private readonly ConcurrentDictionary<string, string> _pages = new(StringComparer.Ordinal);
 
     public bool IsDevelopment => false;
 
@@ -41,6 +43,38 @@ public sealed class ProductionAssets(IWebHostEnvironment environment) : INiteAss
             ?? manifest.Entries.FirstOrDefault(e => Path.ChangeExtension(e.Key, null) == Path.ChangeExtension(key, null)).Value
             ?? throw new InvalidOperationException($"Module '{source}' is not in the Nite build. Add it to \"entries\" in nite.json.");
         return ValueTask.FromResult(ToAsset(context, entry));
+    }
+
+    public ValueTask<string> GetHtmlAsync(string page, HttpContext context)
+    {
+        var key = NitePaths.ToUrlPath(page).TrimStart('/');
+        var html = _pages.GetOrAdd(key, _ =>
+        {
+            if (!_manifest.Value.Html.TryGetValue(key, out var built))
+            {
+                throw new InvalidOperationException($"HTML entry '{page}' is not in the Nite build. Put it in the client root as index.html or add it to \"entries\" in nite.json.");
+            }
+            return ReadWebRootFile($"{NiteProject.BasePath.TrimStart('/')}/{built}")
+                ?? throw new InvalidOperationException($"wwwroot{NiteProject.BasePath}/{built} is missing. Rebuild with `nite build`.");
+        });
+
+        // The build wrote root-relative /_nite/ URLs; an app hosted under a path base needs it prefixed.
+        var pathBase = context.Request.PathBase.Value;
+        return ValueTask.FromResult(string.IsNullOrEmpty(pathBase)
+            ? html
+            : html.Replace($"\"{NiteProject.BasePath}/", $"\"{pathBase}{NiteProject.BasePath}/", StringComparison.Ordinal));
+    }
+
+    private string? ReadWebRootFile(string path)
+    {
+        var file = environment.WebRootFileProvider.GetFileInfo(path);
+        if (!file.Exists)
+        {
+            return null;
+        }
+        using var stream = file.CreateReadStream();
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static NiteAsset ToAsset(HttpContext context, NiteManifestEntry entry) =>

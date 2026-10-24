@@ -1,11 +1,18 @@
 # nite
 
-React islands (and TypeScript in general) for ASP.NET Core, without a Node.js toolchain.
+TypeScript and React for ASP.NET Core with a Vite-style dev loop and no Node.js toolchain.
 
-Write components in `.tsx`, drop them into Razor pages with a tag helper, and get a Vite-style dev
-loop: compile on request, pre-bundled npm packages, CSS hot swap, an error overlay. `dotnet publish`
-produces minified, hashed, code-split bundles served by `MapStaticAssets`. No `node`, `npm`,
-`package.json` or Vite anywhere.
+Build the frontend and the backend in one project, one process, one `dotnet watch`: edit a React
+component and it updates in place with its state intact; edit a C# endpoint and the page re-fetches
+without reloading. `dotnet publish` produces minified, hashed, code-split bundles served by
+`MapStaticAssets`. No `node`, `npm`, `package.json` or Vite anywhere.
+
+Two ways to use it:
+
+- **A single-page app**: `Client/index.html` plus React (or plain TypeScript), served by
+  `app.MapNiteSpa()` next to your API. Same origin, so no CORS and no dev proxy.
+- **Islands in Razor pages**: server-rendered pages with interactive React components where you
+  need them.
 
 ```cshtml
 <island name="TodoList" props='new { title = "Today", items = Model.Todos }' client="visible">
@@ -25,35 +32,63 @@ uses for dependency pre-bundling.
 | **Packages** | A small npm client in C#: resolves semver ranges from the registry, hoists into a normal `node_modules`, writes `nite.lock.json`, verifies tarball integrity, never runs install scripts. Editors and `tsc` see packages where they expect them. |
 | **Dev server** (`/_nite`) | Each source file is transformed on request (cached until it changes). Relative imports are rewritten to canonical URLs so a module never loads twice. Bare imports (`react`) go through an **import map** to pre-bundled dependencies. |
 | **Pre-bundling** | Every bare import becomes one ESM file, built in a single code-split esbuild pass so `react-dom` and your code share one React. CommonJS packages (React itself, still) get a generated wrapper whose named exports come from a `cjs-module-lexer`-style scan. |
-| **Live updates** | A file watcher pushes over a WebSocket. CSS edits swap in place and keep component state; other edits reload the page. Compile errors and missing packages show an overlay with file, line and source. |
+| **React Fast Refresh** | esbuild has no Fast Refresh transform, so Nite reads esbuild's output, registers each component with `react-refresh` and signs it with its hook calls. A module graph tracks who imports what; a change walks up to the nearest module whose exports are all components, re-imports it, and React swaps the new code in. Changing hooks remounts the component instead of crashing. If the walk reaches the page's entry module, the page reloads. |
+| **Other live updates** | CSS (imported or `<link>`ed) swaps in place. Compile errors show an overlay without reloading and clear when the file is fixed. C# hot reloads raise a `nite:server-update` event in the browser. |
+| **HTML entries** | `Client/index.html` is a real entry, as in Vite: local module scripts and stylesheets are compiled in dev and replaced with hashed bundles in production. |
 | **Islands** | A 1.5 KB (minified) loader finds `data-island` elements, loads each island's module on `load`, `idle`, `visible` or a `media` query, and mounts it. A `MutationObserver` mounts islands added later (htmx, Turbo, Blazor enhanced navigation) and unmounts removed ones. |
-| **Production** | One esbuild build: islands, entries and the loader, minified and split into shared chunks, plus a manifest the tag helpers read. Output lands in `wwwroot/_nite`, so `MapStaticAssets` fingerprints and precompresses it. |
+| **Production** | One esbuild build for islands, HTML entries and other entries: minified, split into shared chunks, plus a manifest. Output lands in `wwwroot/_nite`, so `MapStaticAssets` serves it precompressed. |
 
-For the sample app, a page ships React and ReactDOM once (about 58 KB with Brotli) and each island
-adds about 0.5 KB.
+Hot updates land in roughly 100 to 200 ms. A page of islands ships React and ReactDOM once (about
+58 KB with Brotli) and each island adds about 0.5 KB.
 
 ## Getting started
 
-The repository holds the library (`src/Nite`), the CLI (`src/Nite.Cli`), a sample
-(`samples/Nite.Sample`) and tests. There are no NuGet packages yet, so reference the projects
-directly, as the sample does.
+The repository holds the library (`src/Nite`), the CLI (`src/Nite.Cli`), two samples and tests.
+There are no NuGet packages yet, so reference the projects directly, as the samples do.
 
 ```bash
-cd samples/Nite.Sample
-dotnet run                     # http://localhost:5025, Development mode
-dotnet publish -c Release      # runs `nite build`, ships wwwroot/_nite
+cd samples/Nite.Spa            # React SPA + minimal API
+DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1 dotnet watch    # see "Full-stack dev with dotnet watch"
+
+cd samples/Nite.Sample         # Razor Pages with React islands
+dotnet watch
+
+dotnet publish -c Release      # either sample: runs `nite build`, ships wwwroot/_nite
 ```
 
 The first run downloads esbuild and the packages in `nite.json` (a few seconds); after that,
 startup reuses the cache and the lockfile.
 
-### 1. Wire it up
+### A single-page app
+
+```
+MyApp/
+  Program.cs
+  nite.json
+  Client/
+    index.html        <script type="module" src="./main.tsx"></script>
+    main.tsx          createRoot(...).render(<App />)
+    App.tsx
+  wwwroot/            static files as-is (favicon, images)
+```
 
 ```csharp
 builder.Services.AddNite();
-// ...
-app.UseNite();          // before UseRouting / MapStaticAssets; a no-op outside Development
+
+var app = builder.Build();
+app.UseNite();                       // dev server under /_nite; no-op outside Development
+
+app.MapGet("/api/todos", ...);       // your API, same origin as the app
+app.MapStaticAssets();
+app.MapNiteSpa();                    // index.html for "/" and client-side routes like /todos/3
 ```
+
+`MapNiteSpa` is a fallback route, so real endpoints always win. It never answers under `/api`
+(pass `apiPrefix` to change that), so a mistyped API call gets a 404, not a page of HTML. In
+development it serves `Client/index.html` with the dev client injected; in production, the built
+copy with hashed URLs.
+
+### Islands in Razor pages
 
 ```cshtml
 @* _ViewImports.cshtml *@
@@ -62,29 +97,6 @@ app.UseNite();          // before UseRouting / MapStaticAssets; a no-op outside 
 @* _Layout.cshtml, inside <head> *@
 <nite-head />
 ```
-
-For `dotnet publish`, import `build/Nite.targets` and set `NiteCliPath` (see
-`samples/Nite.Sample/Nite.Sample.csproj`).
-
-### 2. Configure packages: `nite.json`
-
-```jsonc
-{
-  "clientRoot": "Client",          // client source folder
-  "islands": "islands",            // Client/islands/*.tsx are usable as <island name="...">
-  "entries": [],                   // other modules pages load with <nite-module src="...">
-  "renderer": "react",             // or a module exporting mount(el, Component, props)
-  "jsxImportSource": "react",      // "preact" works too, with a custom renderer
-  "target": "es2022",
-  "dependencies": { "react": "^19.3.1", "react-dom": "^19.3.1" },
-  "devDependencies": { "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0" }
-}
-```
-
-Edit `dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
-Commit `nite.lock.json`.
-
-### 3. Write islands
 
 ```tsx
 // Client/islands/Counter.tsx
@@ -104,10 +116,69 @@ export default function Counter({ start }: { start: number }) {
 ```
 
 Props are serialized as camelCase JSON. Child content is rendered by the server and replaced
-when the island mounts, so it works as a loading state and as content for crawlers.
+when the island mounts, so it works as a loading state and as content for crawlers. Modules that
+aren't islands can be loaded with `<nite-module src="main.ts" />` (list them in `entries`).
 
 Components can import CSS (`import "./x.css"`), JSON and assets (`import logo from "./logo.svg"`
 gives a URL), as with Vite.
+
+### `nite.json`
+
+```jsonc
+{
+  "clientRoot": "Client",          // client source folder
+  "islands": "islands",            // Client/islands/*.tsx are usable as <island name="...">
+  "entries": [],                   // more HTML pages or <nite-module> scripts (index.html is automatic)
+  "renderer": "react",             // island renderer, or a module exporting mount(el, Component, props)
+  "jsxImportSource": "react",      // "preact" works too, with a custom renderer
+  "fastRefresh": true,             // installs react-refresh as a dev dependency when React is used
+  "target": "es2022",
+  "dependencies": { "react": "^19.3.1", "react-dom": "^19.3.1" },
+  "devDependencies": { "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0" }
+}
+```
+
+Edit `dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
+Commit `nite.lock.json`. For `dotnet publish`, import `build/Nite.targets` and set `NiteCliPath`
+(see either sample's `.csproj`).
+
+## Full-stack dev with `dotnet watch`
+
+`dotnet watch` handles the C# side and Nite handles the client side:
+
+| You edit | What happens |
+|---|---|
+| A React component | Fast Refresh: updated in place, state kept (about 100 to 200 ms). |
+| A helper module (`format.ts`) | The components that use it refresh; state kept. |
+| CSS | Swapped in place. |
+| The entry (`main.tsx`) or `index.html` | Page reloads. |
+| C# that hot reload can apply | Applied in the running app; the browser gets a `nite:server-update` event. |
+| C# that needs a restart (new endpoint in `Program.cs`, say) | dotnet watch restarts the app; the page waits for it and reloads (about 10 s). |
+
+`dotnet watch` injects its own browser script, which reloads the page after **every** C# change.
+That suits Razor pages, but in a single-page app it throws away client state for an API-only
+change. Turn it off, and Nite takes over (it reloads after restarts by itself):
+
+```bash
+DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1 dotnet watch
+```
+
+(It has to be set in the shell: `dotnet watch` reads it from its own environment, not from
+`launchSettings.json`.) Then let pages re-fetch when server code changes:
+
+```ts
+export function onServerUpdate(callback: () => void) {
+  addEventListener("nite:server-update", callback);
+  return () => removeEventListener("nite:server-update", callback);
+}
+
+useEffect(() => {
+  load();
+  return onServerUpdate(load); // edit the endpoint in C#, see the new data, keep your state
+}, []);
+```
+
+The event never fires in production, so this costs nothing there.
 
 ## CLI
 
@@ -124,15 +195,20 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
   runtime. If you need them, use Vite; it's the right tool.
 - **No type checking**, same as Vite: esbuild strips types. Run `tsc --noEmit` (or the native
   TypeScript compiler) in CI.
-- **No React Fast Refresh.** Script edits reload the page; CSS edits swap in place. Islands keep
-  that cheap, but component state is lost on a script edit.
+- **Fast Refresh is heuristic.** Components are found in esbuild's output by shape: PascalCase
+  functions, arrow functions, `memo` and `forwardRef`. Hook signatures cover the component's own
+  hook calls; if a *custom* hook changes its internal hook order, save again or reload. Class
+  components and higher-order components other than `memo`/`forwardRef` refresh by propagating to
+  their importers.
 - **No SSR of islands.** Islands render on the client; use the fallback content for the
   server-side picture.
 - **Registry packages only**: no git, `file:` or `npm:` alias dependencies. Optional dependencies
   are skipped and install scripts never run, so packages that need a postinstall step won't work.
 - `tsconfig` `paths` aliases, CSS `url()` rewriting in dev, and CSS from inside npm packages are
   not handled yet.
-- Production asset URLs assume the app is served from the site root (`/_nite/...`).
+- Production asset URLs assume the app is served from the site root (`/_nite/...`), except in
+  HTML served by `MapNiteSpa`, which adds the request's path base. Hashed bundles are revalidated
+  with ETags rather than cached as immutable.
 
 ## Development
 

@@ -31,8 +31,9 @@ public sealed class NiteConfig
     public string Islands { get; init; } = "islands";
 
     /// <summary>
-    /// Extra modules (relative to <see cref="ClientRoot"/>) that pages load with <c>&lt;nite-module&gt;</c>.
-    /// Islands are entries automatically.
+    /// Extra entries relative to <see cref="ClientRoot"/>: modules that pages load with
+    /// <c>&lt;nite-module&gt;</c>, or HTML pages served with <c>MapNiteSpa</c>. Islands and
+    /// <c>index.html</c> (when it exists) are entries automatically.
     /// </summary>
     public List<string> Entries { get; init; } = [];
 
@@ -45,6 +46,12 @@ public sealed class NiteConfig
     /// <summary>Package used for the automatic JSX runtime, such as <c>react</c> or <c>preact</c>.</summary>
     public string JsxImportSource { get; init; } = "react";
 
+    /// <summary>
+    /// React Fast Refresh in development: component edits update in place and keep state. Needs
+    /// <c>react-refresh</c>, which Nite installs as a dev dependency when React is a dependency.
+    /// </summary>
+    public bool FastRefresh { get; init; } = true;
+
     /// <summary>esbuild target for production output.</summary>
     public string Target { get; init; } = "es2022";
 
@@ -55,11 +62,27 @@ public sealed class NiteConfig
     /// <summary>Installed for editor tooling (such as <c>@types/react</c>) but never bundled.</summary>
     public Dictionary<string, string> DevDependencies { get; init; } = [];
 
+    /// <summary>Everything to install: dependencies, dev dependencies and packages Nite needs itself.</summary>
     [JsonIgnore]
-    public IReadOnlyDictionary<string, string> AllDependencies =>
-        DevDependencies.Concat(Dependencies)
-            .GroupBy(pair => pair.Key)
-            .ToDictionary(group => group.Key, group => group.Last().Value);
+    public IReadOnlyDictionary<string, string> AllDependencies
+    {
+        get
+        {
+            var all = DevDependencies.Concat(Dependencies)
+                .GroupBy(pair => pair.Key)
+                .ToDictionary(group => group.Key, group => group.Last().Value);
+            if (UsesFastRefresh)
+            {
+                all.TryAdd("react-refresh", ReactRefreshRange);
+            }
+            return all;
+        }
+    }
+
+    internal const string ReactRefreshRange = "^0.19.0";
+
+    [JsonIgnore]
+    internal bool UsesFastRefresh => FastRefresh && JsxImportSource == "react" && Dependencies.ContainsKey("react");
 
     public static NiteConfig Load(string projectDirectory)
     {
