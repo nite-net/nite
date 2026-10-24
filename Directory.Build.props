@@ -1,0 +1,8 @@
+<Project>
+  <!-- Shared by every project in the repository. Bump Version here when tagging a release. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Tim McQueen</Authors>
+    <RepositoryUrl>https://github.com/tmcqueen/nite</RepositoryUrl>
+  </PropertyGroup>
+</Project>
