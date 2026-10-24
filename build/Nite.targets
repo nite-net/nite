@@ -1,0 +1,52 @@
+<Project>
+  <!--
+    Nite build integration. Import this from a web project to:
+      * keep node_modules, .nite and client sources out of the build and publish output, and
+      * run `nite build` before Release builds (so `dotnet publish` ships wwwroot/_nite).
+
+    Properties:
+      NiteBuildEnabled  true/false. Defaults to true for Release builds.
+      NiteCliPath       Path to Nite.Cli.dll (the Nite.Cli project's output).
+  -->
+  <PropertyGroup>
+    <NiteBuildEnabled Condition="'$(NiteBuildEnabled)' == '' and '$(Configuration)' == 'Release'">true</NiteBuildEnabled>
+    <NiteClientRoot Condition="'$(NiteClientRoot)' == ''">Client</NiteClientRoot>
+    <NiteDotnet Condition="'$(NiteDotnet)' == '' and '$(DOTNET_HOST_PATH)' != ''">$(DOTNET_HOST_PATH)</NiteDotnet>
+    <NiteDotnet Condition="'$(NiteDotnet)' == ''">dotnet</NiteDotnet>
+    <DefaultItemExcludes>$(DefaultItemExcludes);node_modules/**;.nite/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Sources, tsconfig and lockfiles are inputs to the build, not files to deploy. -->
+    <Content Update="$(NiteClientRoot)/**;nite.json;nite.lock.json" CopyToPublishDirectory="Never" CopyToOutputDirectory="Never" />
+    <!--
+      Build output is only ever content when NiteBuild has just produced it. Otherwise a Debug build
+      would serve whatever an old Release build left behind, and a rebuild (clean + build in one
+      evaluation) would reference files the clean already deleted.
+    -->
+    <Content Remove="wwwroot/_nite/**" />
+  </ItemGroup>
+
+  <!--
+    Runs after project references resolve (so the CLI is built) and before static web assets are
+    collected, then adds the fresh output as content so it publishes with the app.
+  -->
+  <Target Name="NiteBuild"
+          AfterTargets="ResolveProjectReferences"
+          BeforeTargets="ResolveStaticWebAssetsConfiguration;AssignTargetPaths"
+          Condition="'$(NiteBuildEnabled)' == 'true'">
+    <Error Condition="'$(NiteCliPath)' == '' or !Exists('$(NiteCliPath)')"
+           Text="Nite: NiteCliPath ('$(NiteCliPath)') does not point to Nite.Cli.dll. Build Nite.Cli or set NiteCliPath." />
+
+    <Exec Command="&quot;$(NiteDotnet)&quot; &quot;$(NiteCliPath)&quot; build &quot;$(MSBuildProjectDirectory)&quot;" />
+
+    <ItemGroup>
+      <Content Include="wwwroot/_nite/**" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+  <!-- `dotnet clean` also removes the production build output. -->
+  <Target Name="NiteCleanBuildOutput" AfterTargets="Clean">
+    <RemoveDir Directories="$(MSBuildProjectDirectory)/wwwroot/_nite" />
+  </Target>
+</Project>

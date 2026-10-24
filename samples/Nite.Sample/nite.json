@@ -1,0 +1,15 @@
+{
+  // Client source lives in Client/; anything in Client/islands/ can be used with <island name="...">.
+  "clientRoot": "Client",
+  "islands": "islands",
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "clsx": "^2.1.1"
+  },
+  // Installed for editor IntelliSense only; never bundled.
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}

@@ -55,3 +55,8 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Nite
+node_modules/
+.nite/
+**/wwwroot/_nite/

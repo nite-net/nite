@@ -1,0 +1,37 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "React islands";
+}
+
+<section class="hero">
+    <h1>Server-rendered page, client-side islands</h1>
+    <p>
+        Everything on this page is plain Razor except the two cards below, which are React
+        components written in TypeScript. They were compiled by esbuild on request, with no
+        Node.js, npm or Vite involved.
+    </p>
+</section>
+
+<div class="grid">
+    <article class="card">
+        <h2>Counter</h2>
+        <p class="muted">Loads as soon as the page does. The starting value comes from the server.</p>
+        <island name="Counter" props="new { start = DateTime.Now.Second, step = 1 }">
+            <p class="muted">Loading counter…</p>
+        </island>
+    </article>
+
+    <article class="card">
+        <island name="TodoList" props='new { title = "Today", items = Model.Todos }' client="visible">
+            @* Shown until the island mounts: real content for crawlers and slow connections. *@
+            <h2>Today</h2>
+            <ul class="fallback-list">
+                @foreach (var todo in Model.Todos)
+                {
+                    <li>@(todo.Done ? "✓" : "○") @todo.Title</li>
+                }
+            </ul>
+        </island>
+    </article>
+</div>

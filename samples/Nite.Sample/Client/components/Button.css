@@ -1,0 +1,31 @@
+.btn {
+  font: inherit;
+  border-radius: 8px;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 120ms ease, transform 60ms ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-primary:hover {
+  background: var(--accent-strong);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-2);
+}
