@@ -86,7 +86,7 @@ public class PackageInstallerTests : IDisposable
     }
 
     /// <summary>Serves packuments and tarballs for made-up packages.</summary>
-    private sealed class FakeRegistry : HttpMessageHandler
+    internal sealed class FakeRegistry : HttpMessageHandler
     {
         private readonly Dictionary<string, Dictionary<string, object>> _versions = [];
         private readonly Dictionary<string, byte[]> _tarballs = [];

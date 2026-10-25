@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Nite.Esbuild;
+using Nite.Observability;
 
 namespace Nite.Css;
 
@@ -52,7 +54,11 @@ public sealed class CssPipeline : IAsyncDisposable
 
     /// <summary>Runs one file through the steps that apply to it.</summary>
     /// <param name="mode"><c>development</c> or <c>production</c>, as PostCSS configs see it.</param>
-    internal async Task<CssStepResult> ProcessAsync(string file, string mode)
+    /// <param name="parent">
+    /// The span the tools' spans belong to. esbuild calls plugins from its reader loop, whose
+    /// ambient span is whatever request first started esbuild, so plugins pass the build's span.
+    /// </param>
+    internal async Task<CssStepResult> ProcessAsync(string file, string mode, ActivityContext parent = default)
     {
         var extension = Path.GetExtension(file).ToLowerInvariant();
         var dependencies = new List<string>();
@@ -62,12 +68,12 @@ public sealed class CssPipeline : IAsyncDisposable
         switch (extension)
         {
             case ".scss" or ".sass":
-                var sass = await _sass.CompileAsync(file, options.PreprocessorOptions.Scss);
+                var sass = await RunToolAsync("sass", file, parent, () => _sass.CompileAsync(file, options.PreprocessorOptions.Scss));
                 css = sass.Css;
                 dependencies.AddRange(sass.Dependencies);
                 break;
             case ".less":
-                var less = await _less.CompileAsync(file, options.PreprocessorOptions.Less);
+                var less = await RunToolAsync("less", file, parent, () => _less.CompileAsync(file, options.PreprocessorOptions.Less));
                 css = less.Css;
                 dependencies.AddRange(less.Dependencies);
                 break;
@@ -84,19 +90,39 @@ public sealed class CssPipeline : IAsyncDisposable
 
         if (TailwindCompiler.Uses(css) && TailwindApplies(css))
         {
-            var tailwind = await _tailwind.ProcessAsync(file, css);
+            var tailwind = await RunToolAsync("tailwind", file, parent, () => _tailwind.ProcessAsync(file, css));
             css = tailwind.Css;
             dependencies.AddRange(tailwind.Dependencies);
         }
 
         if (options.PostCss && PostCssRunner.FindConfig(_project) is { } config)
         {
-            var postcss = await _postcss.ProcessAsync(config, css, file, mode);
+            var postcss = await RunToolAsync("postcss", file, parent, () => _postcss.ProcessAsync(config, css, file, mode));
             css = postcss.Css;
             dependencies.Add(config);
             dependencies.AddRange(postcss.Dependencies);
         }
         return new CssStepResult(css, dependencies);
+    }
+
+    private async Task<T> RunToolAsync<T>(string tool, string file, ActivityContext parent, Func<Task<T>> run)
+    {
+        using var activity = NiteTelemetry.Source.StartActivity("nite.css." + tool, ActivityKind.Internal, parent);
+        activity?.SetTag("nite.file", _project.RelativeToClientRoot(file));
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            return await run();
+        }
+        catch (Exception ex)
+        {
+            activity.Fail(ex);
+            throw;
+        }
+        finally
+        {
+            NiteTelemetry.StylesheetToolDuration.Record(NiteTelemetry.SecondsSince(started), new KeyValuePair<string, object?>("nite.css.tool", tool));
+        }
     }
 
     /// <summary>
@@ -161,6 +187,7 @@ public sealed class CssPipeline : IAsyncDisposable
         Func<string, string?>? rewriteUrl = null, bool uniqueModuleNames = false)
     {
         var plugin = new EsbuildPlugin { Name = "nite-css" };
+        var parent = Activity.Current?.Context ?? default;
 
         // Every path in a dev stylesheet build comes through here (those builds are small); in a
         // production build, which also bundles all the JavaScript, only the few that need it.
@@ -183,7 +210,7 @@ public sealed class CssPipeline : IAsyncDisposable
         plugin.OnLoad.Add(new EsbuildOnLoad(StyleFilter, "file", async args =>
         {
             var file = _virtualModules.TryGetValue(args.Path, out var real) ? real : args.Path;
-            var result = await ProcessAsync(file, mode);
+            var result = await ProcessAsync(file, mode, parent);
             onProcessed?.Invoke(file, result);
             return new EsbuildLoadResult
             {

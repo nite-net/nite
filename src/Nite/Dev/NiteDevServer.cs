@@ -1,16 +1,20 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Nite.Assets;
 using Nite.Configuration;
 using Nite.Css;
 using Nite.Esbuild;
 using Nite.Html;
+using Nite.Observability;
 using Nite.Packages;
 using Nite.Runtime;
 
@@ -83,15 +87,52 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
     public bool IsDevelopment => true;
 
+    /// <summary>For <see cref="NiteHealthCheck"/>: started, busy, failed or ready.</summary>
+    internal HealthCheckResult CheckHealth()
+    {
+        if (Volatile.Read(ref _started) == 0)
+        {
+            return HealthCheckResult.Unhealthy("The Nite dev server has not started. Call app.UseNite().");
+        }
+
+        var ready = _ready;
+        if (ready.IsFaulted)
+        {
+            var error = ready.Exception!.GetBaseException();
+            return HealthCheckResult.Unhealthy($"Nite failed: {error.Message}", error);
+        }
+        if (!ready.IsCompleted)
+        {
+            return HealthCheckResult.Degraded("Nite is installing packages or pre-bundling dependencies.");
+        }
+        return HealthCheckResult.Healthy("The Nite dev server is ready.", new Dictionary<string, object>
+        {
+            ["modules"] = _modules.Count,
+            ["dependencies"] = _dependencies.Imports.Count,
+        });
+    }
+
     /// <summary>Starts installing, scanning and pre-bundling in the background. Safe to call more than once.</summary>
-    public void Start()
+    /// <param name="hostStarted">
+    /// Completes when the host has started. Startup waits for it, because telemetry listeners
+    /// (OpenTelemetry's) subscribe as the host starts and would miss the startup trace otherwise.
+    /// </param>
+    public void Start(Task? hostStarted = null)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
         {
             return;
         }
 
-        _ready = RunExclusiveAsync(InitializeAsync);
+        _ready = RunExclusiveAsync(async () =>
+        {
+            if (hostStarted is not null)
+            {
+                // Bounded, in case the host never reports that it started.
+                await Task.WhenAny(hostStarted, Task.Delay(TimeSpan.FromSeconds(10)));
+            }
+            await NiteTelemetry.TraceAsync("nite.dev.startup", InitializeAsync, root: true);
+        });
         StartWatching();
         NiteHotReload.Updated += OnServerHotReload;
     }
@@ -184,6 +225,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     public async Task HandleAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? "/";
+        NameRequest(context, path);
         switch (path)
         {
             case "/ws":
@@ -200,6 +242,9 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
                 return;
             case "/runtime/renderer.js":
                 await WriteAsync(context, RuntimeSources.RendererForDev(_project), "text/javascript");
+                return;
+            case "/runtime/config.js":
+                await WriteAsync(context, RuntimeSources.ClientConfig, "text/javascript");
                 return;
         }
 
@@ -409,9 +454,14 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     {
         if (_stylesheets.TryGetValue(key, out var cached) && cached.BasePath == basePath && cached.IsCurrent())
         {
+            CountCompile("stylesheet", hit: true);
             return cached;
         }
+        return await TraceCompileAsync("stylesheet", entry, () => BuildStylesheetUncachedAsync(key, entry, basePath));
+    }
 
+    private async Task<BuiltStylesheet> BuildStylesheetUncachedAsync(string key, string entry, string basePath)
+    {
         var files = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         var processed = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         var isModule = CssPipeline.IsCssModule(entry);
@@ -554,9 +604,14 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var stamp = (info.LastWriteTimeUtc.Ticks, info.Length);
         if (_modules.TryGetValue(file, out var cached) && cached.Stamp == stamp)
         {
+            CountCompile("module", hit: true);
             return cached;
         }
+        return await TraceCompileAsync("module", file, () => CompileUncachedAsync(file, stamp));
+    }
 
+    private async Task<CachedModule> CompileUncachedAsync(string file, (long Ticks, long Length) stamp)
+    {
         var source = await File.ReadAllTextAsync(file);
         var extension = Path.GetExtension(file).ToLowerInvariant();
         var loader = extension switch
@@ -583,6 +638,11 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var discovered = false;
         foreach (var specifier in ImportScanner.FindSpecifiers(result.Code))
         {
+            if (specifier == RuntimeSources.ClientConfigSpecifier)
+            {
+                // Nite's own module, mapped in the import map; not a package.
+                continue;
+            }
             if (ResolveImport(file, specifier) is { } target)
             {
                 imports.Add(target);
@@ -639,6 +699,54 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var module = new CachedModule(stamp, code, missing.ToList(), refresh.IsBoundary);
         _modules[file] = module;
         return module;
+    }
+
+    /// <summary>
+    /// Names the request's span after its route, as routing does for endpoints. Requests under
+    /// /_nite never reach routing, so traces would otherwise list each of them as just "GET".
+    /// </summary>
+    private static void NameRequest(HttpContext context, string path)
+    {
+        if (context.Features.Get<IHttpActivityFeature>()?.Activity is not { IsAllDataRequested: true } activity)
+        {
+            return;
+        }
+
+        var route = NiteProject.BasePath + path switch
+        {
+            _ when path.StartsWith("/src/", StringComparison.Ordinal) => "/src/{**path}",
+            _ when path.StartsWith("/deps/", StringComparison.Ordinal) => "/deps/{file}",
+            _ when path.StartsWith("/npm/", StringComparison.Ordinal) => "/npm/{**specifier}",
+            "/ws" or "/client.js" or "/refresh.js" or "/runtime/islands.js" or "/runtime/renderer.js" or "/runtime/config.js" => path,
+            _ => "/{**path}",
+        };
+        activity.DisplayName = $"{context.Request.Method} {route}";
+        activity.SetTag("http.route", route);
+    }
+
+    private static void CountCompile(string kind, bool hit) =>
+        NiteTelemetry.Compiles.Add(1, new KeyValuePair<string, object?>("nite.kind", kind), new KeyValuePair<string, object?>("nite.cache", hit ? "hit" : "miss"));
+
+    /// <summary>A cache miss: one span (a child of the request that needed it) and one duration measurement.</summary>
+    private async Task<T> TraceCompileAsync<T>(string kind, string file, Func<Task<T>> compile)
+    {
+        CountCompile(kind, hit: false);
+        using var activity = NiteTelemetry.Source.StartActivity(kind == "module" ? "nite.dev.compile" : "nite.dev.stylesheet");
+        activity?.SetTag("nite.file", _project.RelativeToClientRoot(file));
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            return await compile();
+        }
+        catch (Exception ex)
+        {
+            activity.Fail(ex);
+            throw;
+        }
+        finally
+        {
+            NiteTelemetry.CompileDuration.Record(NiteTelemetry.SecondsSince(started), new KeyValuePair<string, object?>("nite.kind", kind));
+        }
     }
 
     private void UpdateGraph(string file, IReadOnlyList<string> imports)
@@ -918,6 +1026,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     private async Task FlushChangesAsync()
     {
         await _flushLock.WaitAsync();
+        Activity? activity = null;
         try
         {
             var changed = _pendingChanges.Keys.ToList();
@@ -930,11 +1039,18 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
                 return;
             }
 
+            // A root span: file changes come from the watcher, and the timer that got us here
+            // carries whatever request was current when it was created.
+            Activity.Current = null;
+            activity = NiteTelemetry.Source.StartActivity("nite.dev.hot_update");
+            activity?.SetTag("nite.files.changed", changed.Count);
+
             if (changed.Any(p => Path.GetFileName(p).StartsWith("tsconfig", StringComparison.Ordinal) && p.EndsWith(".json", StringComparison.Ordinal)))
             {
                 // Path aliases may have moved; every compiled module's imports could resolve differently.
                 LoadProjectInputs();
                 _modules.Clear();
+                CountUpdate(activity, "reload");
                 await _hub.BroadcastAsync(new { type = "reload" });
                 return;
             }
@@ -943,16 +1059,19 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             if (plan.Reload)
             {
                 _logger.LogDebug("Reloading after changes to {Files}", string.Join(", ", changed.Select(_project.RelativeToClientRoot)));
+                CountUpdate(activity, "reload");
                 await _hub.BroadcastAsync(new { type = "reload" });
                 return;
             }
 
             foreach (var error in plan.Errors)
             {
+                CountUpdate(activity, "error");
                 await _hub.BroadcastAsync(new { type = "error", error.Message, error.File, error.Line, error.Column, error.LineText });
             }
             foreach (var key in plan.Stylesheets)
             {
+                CountUpdate(activity, "css");
                 if (key.StartsWith("npm:", StringComparison.Ordinal))
                 {
                     await _hub.BroadcastAsync(new { type = "css", path = key, url = $"npm/{key[4..]}?import" });
@@ -975,17 +1094,32 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
                 }
                 var updates = plan.Boundaries.Select(file => new { path = _project.RelativeToClientRoot(file), url = $"src/{_project.RelativeToClientRoot(file)}", timestamp });
                 _logger.LogDebug("Hot updating {Modules}", string.Join(", ", plan.Boundaries.Select(_project.RelativeToClientRoot)));
+                CountUpdate(activity, "update");
+                activity?.SetTag("nite.update.modules", plan.Boundaries.Count);
                 await _hub.BroadcastAsync(new { type = "update", updates, cleared = plan.Cleared });
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Handling file changes failed; reloading");
+            activity.Fail(ex);
+            CountUpdate(activity, "reload");
             await _hub.BroadcastAsync(new { type = "reload" });
         }
         finally
         {
+            activity?.Dispose();
             _flushLock.Release();
+        }
+    }
+
+    /// <summary>Counts one browser update; the span keeps the most decisive kind (a reload beats the rest).</summary>
+    private static void CountUpdate(Activity? activity, string kind)
+    {
+        NiteTelemetry.HotUpdates.Add(1, new KeyValuePair<string, object?>("nite.update.kind", kind));
+        if (activity is not null && activity.GetTagItem("nite.update.kind") is not "reload")
+        {
+            activity.SetTag("nite.update.kind", kind);
         }
     }
 
@@ -1190,6 +1324,8 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
     private async Task ReoptimizeAsync()
     {
+        // Timer callbacks carry the span that was current when the timer was made; start fresh.
+        Activity.Current = null;
         _ready = RunExclusiveAsync(OptimizeAsync);
         try
         {
@@ -1204,6 +1340,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
     private async Task ReloadConfigAsync()
     {
+        Activity.Current = null;
         NiteProject updated;
         try
         {
@@ -1286,6 +1423,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
         var basePath = context.Request.PathBase + NiteProject.BasePath;
         var imports = _dependencies.Imports.ToDictionary(pair => pair.Key, pair => $"{basePath}/{pair.Value}");
+        imports[RuntimeSources.ClientConfigSpecifier] = $"{basePath}/runtime/config.js";
         var scripts = new List<string>();
         if (_refreshEnabled)
         {

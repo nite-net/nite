@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Nite.Configuration;
+using Nite.Observability;
 
 namespace Nite.Packages;
 
@@ -31,6 +32,8 @@ internal static class PlatformPackage
                 return directory;
             }
 
+            using var activity = NiteTelemetry.Source.StartActivity("nite.tool.download");
+            activity?.SetTag("nite.package", $"{package}@{version}");
             var npm = new NpmRegistry(http, registry);
             var packument = await npm.GetPackumentAsync(package, cancellationToken);
             var manifest = packument.Versions.GetValueOrDefault(version)

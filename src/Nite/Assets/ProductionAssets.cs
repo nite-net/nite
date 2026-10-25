@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Nite.Build;
 
 namespace Nite.Assets;
@@ -12,6 +13,24 @@ public sealed class ProductionAssets(IWebHostEnvironment environment) : INiteAss
     private readonly ConcurrentDictionary<string, string> _pages = new(StringComparer.Ordinal);
 
     public bool IsDevelopment => false;
+
+    /// <summary>For <see cref="Observability.NiteHealthCheck"/>: is the build output there?</summary>
+    internal HealthCheckResult CheckHealth()
+    {
+        try
+        {
+            var manifest = _manifest.Value;
+            return HealthCheckResult.Healthy("The Nite build output is loaded.", new Dictionary<string, object>
+            {
+                ["entries"] = manifest.Entries.Count,
+            });
+        }
+        catch (Exception ex)
+        {
+            // Missing, unreadable or corrupt: none of them should make the health endpoint throw.
+            return HealthCheckResult.Unhealthy(ex.Message, ex);
+        }
+    }
 
     public ValueTask<NiteHead> GetHeadAsync(HttpContext context)
     {

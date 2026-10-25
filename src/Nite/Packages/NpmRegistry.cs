@@ -7,6 +7,7 @@ using System.Net;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Nite.Configuration;
+using Nite.Observability;
 
 namespace Nite.Packages;
 
@@ -93,6 +94,7 @@ public sealed class NpmRegistry
             var cached = await File.ReadAllBytesAsync(cachePath, cancellationToken);
             if (integrity.Matches(cached))
             {
+                NiteTelemetry.Tarballs.Add(1, new KeyValuePair<string, object?>("nite.cache", "hit"));
                 return cached;
             }
         }
@@ -114,6 +116,7 @@ public sealed class NpmRegistry
         }
 
         await WriteAtomicAsync(cachePath, bytes, cancellationToken);
+        NiteTelemetry.Tarballs.Add(1, new KeyValuePair<string, object?>("nite.cache", "miss"));
         return bytes;
     }
 

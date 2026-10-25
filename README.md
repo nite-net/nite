@@ -78,6 +78,7 @@ To work on Nite itself, point new projects at a checkout instead of the NuGet pa
 ```bash
 cd samples/Nite.Spa && nite watch                        # React SPA + minimal API
 cd samples/Nite.Sample && nite watch --browser-refresh   # Razor Pages with React islands
+dotnet run --project samples/Nite.Aspire/AppHost         # the SPA and an API under Aspire
 ```
 
 The first run downloads esbuild and the packages in `nite.json` (a few seconds); after that,
@@ -202,6 +203,28 @@ variants) in the project folder, and from the process environment, are inlined i
 `import.meta.env.NITE_PUBLIC_API` (with `MODE`, `DEV`, `PROD` and `BASE_URL` alongside, as in Vite)
 or `process.env.NITE_PUBLIC_API` (as in Create React App). Anything else in `.env`, such as database
 passwords, never reaches the browser. Editing a `.env` file reloads the page with the new values.
+
+Those values are inlined when code is compiled, so a production build carries whatever was set when
+`nite build` ran. For values that differ per environment or per request (an Application Insights
+connection string, the signed-in user's name, a feature flag), let the server hand them over when it
+serves the page:
+
+```csharp
+builder.Services.AddNite(options => options.ClientConfig = context => new
+{
+    AppInsights = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"],
+    User = context.User.Identity?.Name,
+});
+```
+
+```ts
+import { config } from "nite:config";   // { appInsights, user }, as of this page load
+```
+
+`MapNiteSpa` and `<nite-head />` write the values into the page as JSON (pages that carry them are
+sent `Cache-Control: private`), so one build runs in every environment. Describe their shape in
+`Client/nite-env.d.ts`, which `nite init` creates. `ClientConfigAsync` takes an async callback.
+[`samples/Nite.Aspire`](samples/Nite.Aspire) uses it to start Application Insights in the browser.
 
 `compilerOptions.paths` in the client's tsconfig (following `extends` and Vite's `references` to
 `tsconfig.app.json`) work in development and production, so `import { cn } from "@/lib/utils"`
@@ -351,6 +374,50 @@ useEffect(() => {
 ```
 
 The event never fires in production, so this costs nothing there.
+
+## Telemetry and health checks
+
+Nite reports what it does as OpenTelemetry traces and metrics, through .NET's own
+`ActivitySource` and `Meter` (both named `Nite`), so the library takes no OpenTelemetry dependency
+and costs nothing until something listens. Add the names to your OpenTelemetry setup, for
+example in the web project of an [Aspire](https://aspire.dev) app, next to `AddServiceDefaults()`:
+
+```csharp
+// using Nite.Observability; using OpenTelemetry.Metrics; using OpenTelemetry.Trace;
+builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddSource(NiteTelemetry.SourceName));
+builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddMeter(NiteTelemetry.MeterName));
+```
+
+| Span | When |
+|---|---|
+| `nite.dev.startup` | The dev server starting: install, initial compiles and pre-bundling, as one trace |
+| `nite.dev.compile`, `nite.dev.stylesheet` | A module or stylesheet compiled on request (a child of the request); cache hits make no span |
+| `nite.css.sass`, `.less`, `.tailwind`, `.postcss` | Each stylesheet tool, under the stylesheet it ran for |
+| `nite.dev.hot_update` | A batch of file changes and what the browser got (`nite.update.kind`: update, css, reload, error) |
+| `nite.dev.prebundle` | Pre-bundling dependencies |
+| `nite.packages.install`, `.resolve`, `.materialize` | Installing packages; resolve only runs when the lockfile changes |
+| `nite.tool.download` | Downloading the esbuild or Dart Sass binary (first run only) |
+| `nite.build` | A production build |
+
+Metrics: `nite.dev.compile.duration` and `nite.dev.compiles` (by `nite.kind` and `nite.cache`),
+`nite.css.tool.duration`, `nite.dev.hot_updates`, `nite.dev.prebundle.duration`,
+`nite.packages.install.duration`, `nite.packages.tarballs` (cache hits and misses) and
+`nite.build.duration`. Failed spans carry the error status and an `exception` event.
+
+Requests Nite serves under `/_nite` are named after their route (`GET /_nite/src/{**path}`), as
+routing names endpoints. [`samples/Nite.Aspire`](samples/Nite.Aspire) shows all of this in the Aspire
+dashboard.
+
+A health check reports whether Nite can serve the app:
+
+```csharp
+builder.Services.AddHealthChecks().AddNite();
+```
+
+In development it is Degraded while packages install or dependencies pre-bundle and Unhealthy if
+that failed (a typo in `nite.json`) or `UseNite()` never ran; in production it is Unhealthy if
+`wwwroot/_nite` is missing, which usually means the publish did not run `nite build`. It is a
+readiness check (untagged), so Aspire's `/health` includes it and `/alive` does not.
 
 ## CLI
 

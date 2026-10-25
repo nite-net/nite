@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Nite.Esbuild;
+using Nite.Observability;
 
 namespace Nite.Dev;
 
@@ -28,7 +29,27 @@ internal sealed class DependencyOptimizer(EsbuildService esbuild, ILogger logger
             return cached;
         }
 
+        using var activity = NiteTelemetry.Source.StartActivity("nite.dev.prebundle");
+        activity?.SetTag("nite.dependencies", wanted.Count);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            return await BundleAsync(project, wanted, hash, outDirectory, sourceDirectory, started, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            activity.Fail(ex);
+            throw;
+        }
+        finally
+        {
+            NiteTelemetry.PrebundleDuration.Record(NiteTelemetry.SecondsSince(started));
+        }
+    }
+
+    private async Task<DependencyBundle> BundleAsync(NiteProject project, List<string> wanted, string hash, string outDirectory,
+        string sourceDirectory, long started, CancellationToken cancellationToken)
+    {
         Reset(outDirectory);
         Reset(sourceDirectory);
 

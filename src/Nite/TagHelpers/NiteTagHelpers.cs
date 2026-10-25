@@ -10,7 +10,7 @@ namespace Nite.TagHelpers;
 
 /// <summary>
 /// <c>&lt;nite-head /&gt;</c>: the import map, dev client and island loader in development; the
-/// hashed loader and its preloads in production. Put it in <c>&lt;head&gt;</c>, before other module scripts.
+/// hashed loader and its preloads in production; and <see cref="NiteOptions.ClientConfig"/>'s values. Put it in <c>&lt;head&gt;</c>, before other module scripts.
 /// </summary>
 [HtmlTargetElement("nite-head", TagStructure = TagStructure.WithoutEndTag)]
 public sealed class NiteHeadTagHelper(INiteAssets assets) : TagHelper
@@ -22,6 +22,10 @@ public sealed class NiteHeadTagHelper(INiteAssets assets) : TagHelper
     public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
     {
         output.TagName = null;
+        if (await NiteClientConfig.RenderAsync(ViewContext.HttpContext) is { } config)
+        {
+            output.Content.AppendHtml(config);
+        }
         var head = await assets.GetHeadAsync(ViewContext.HttpContext);
         output.Content.AppendHtml(head.ToHtml());
     }
