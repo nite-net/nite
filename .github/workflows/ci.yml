@@ -38,7 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true # the newest tag sets the version of untagged builds
+          # The newest tag sets the version of untagged builds. fetch-tags alone does not bring
+          # tags into a shallow pull request checkout, so take the (small) full history.
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
