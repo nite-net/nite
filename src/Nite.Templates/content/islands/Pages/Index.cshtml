@@ -1,0 +1,11 @@
+@page
+@{
+    ViewData["Title"] = "Home";
+}
+
+<h1>NITE_TITLE</h1>
+<p class="muted">This page is Razor. The counter below is a React island from <code>Client/islands/Counter.tsx</code>.</p>
+
+<island name="Counter" props="new { start = 0 }">
+    <p class="muted">Loading…</p>
+</island>

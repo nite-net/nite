@@ -17,6 +17,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The dotnet new templates are also what `nite init` writes. -->
+    <EmbeddedResource Include="..\Nite.Templates\content\**\*"
+                      Exclude="..\Nite.Templates\content\**\.template.config\**;..\Nite.Templates\content\**\bin\**;..\Nite.Templates\content\**\obj\**;..\Nite.Templates\content\**\node_modules\**"
+                      LogicalName="templates/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Nite\Nite.csproj" />
   </ItemGroup>
 

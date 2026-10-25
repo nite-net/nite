@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The `dotnet new` templates: nite-spa and nite-islands. content/ is also embedded in the nite CLI,
+    so `nite init` and `dotnet new` write the same files.
+  -->
+  <PropertyGroup>
+    <PackageId>Nite.Templates</PackageId>
+    <PackageType>Template</PackageType>
+    <Description>dotnet new templates for Nite: a React single-page app (nite-spa) and Razor Pages with React islands (nite-islands), with no Node.js toolchain.</Description>
+    <PackageTags>dotnet-new;templates;nite;react;typescript;aspnetcore</PackageTags>
+    <TargetFramework>net10.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <!-- .gitignore and .template.config start with a dot, which NuGet leaves out by default. -->
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <TemplateSource Include="content/**/*" Exclude="content/**/bin/**;content/**/obj/**;content/**/node_modules/**" />
+  </ItemGroup>
+
+  <!--
+    The templates reference the Nite package at this release's version. The source files say
+    NITE_PACKAGE_VERSION, so the copies that are packed get the real number.
+  -->
+  <Target Name="PrepareTemplateContent" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_TemplateStaging>$(IntermediateOutputPath)content/</_TemplateStaging>
+    </PropertyGroup>
+    <Copy SourceFiles="@(TemplateSource)" DestinationFiles="@(TemplateSource->'$(_TemplateStaging)%(RecursiveDir)%(Filename)%(Extension)')" />
+    <WriteLinesToFile Condition="'%(TemplateSource.Filename)%(TemplateSource.Extension)' == 'template.json'"
+                      File="$(_TemplateStaging)%(TemplateSource.RecursiveDir)template.json"
+                      Lines="$([MSBuild]::Escape($([System.IO.File]::ReadAllText('%(TemplateSource.FullPath)').Replace('NITE_PACKAGE_VERSION', '$(Version)').TrimEnd())))"
+                      Overwrite="true" />
+    <ItemGroup>
+      <Content Include="$(_TemplateStaging)**/*" PackagePath="content/%(RecursiveDir)%(Filename)%(Extension)" Pack="true" />
+    </ItemGroup>
+  </Target>
+
+</Project>

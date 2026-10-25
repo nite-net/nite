@@ -1,6 +1,6 @@
 name: Build and publish
 
-# Every push and pull request builds, tests and packs Nite and Nite.Cli. Pushing a tag such as
+# Every push and pull request builds, tests and packs Nite, Nite.Cli and Nite.Templates. Pushing a tag such as
 # v0.3.0 also publishes both packages to nuget.org; the tag must match <Version> in
 # Directory.Build.props, so bump that first.
 #
@@ -8,7 +8,7 @@ name: Build and publish
 # job exchanges a GitHub OIDC token for an API key that is valid for an hour. It needs:
 #   * a trusted publishing policy on nuget.org (Account settings > Trusted Publishing) for
 #     repository owner "nite-net", repository "nite", workflow file "ci.yml" and environment "nuget",
-#     created by the account that owns the Nite and Nite.Cli packages; and
+#     created by the account that owns the Nite, Nite.Cli and Nite.Templates packages; and
 #   * a NUGET_USER secret holding that account's nuget.org profile name (not its email address).
 
 on:
@@ -74,6 +74,7 @@ jobs:
         run: |
           dotnet pack src/Nite -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
           dotnet pack src/Nite.Cli -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/Nite.Templates -c Release -o artifacts -p:Version=${{ steps.version.outputs.version }}
 
       - uses: actions/upload-artifact@v4
         with:

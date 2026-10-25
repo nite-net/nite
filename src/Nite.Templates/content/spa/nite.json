@@ -1,0 +1,12 @@
+{
+  // Client/index.html is the entry; app.MapNiteSpa() serves it.
+  "clientRoot": "Client",
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}
