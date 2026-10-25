@@ -1,0 +1,6 @@
+bin/
+obj/
+node_modules/
+.nite/
+wwwroot/_nite/
+.env*.local

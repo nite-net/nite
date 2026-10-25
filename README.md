@@ -59,8 +59,20 @@ nite add react-router                    # packages, pnpm style
 dotnet publish -c Release                # runs `nite build`, ships wwwroot/_nite
 ```
 
-The packages are not on NuGet yet. Until they are, build from this repository and point new
-projects at it: `nite init my-app --nite-source path/to/nite` (run the CLI with
+Prefer `dotnet new`? The same two templates come as a template pack, which also puts them in
+Visual Studio's and Rider's new-project dialogs:
+
+```bash
+dotnet new install Nite.Templates
+dotnet new nite-spa -o my-app            # or: dotnet new nite-islands
+```
+
+`nite init` and `dotnet new` write the same files (`nite init` also installs the packages; with
+`dotnet new` the first `nite watch` does). Either way you need the `nite` tool for `nite watch`
+and for Release builds.
+
+To work on Nite itself, point new projects at a checkout instead of the NuGet package:
+`nite init my-app --nite-source path/to/nite` (run the CLI with
 `dotnet run --project src/Nite.Cli --`). The samples work the same way:
 
 ```bash
@@ -436,11 +448,19 @@ dotnet test                                          # includes esbuild and styl
 dotnet test --filter "Category!=Integration"         # offline
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds, tests and packs `Nite` and
-`Nite.Cli` on every push and pull request (CI packages are versioned `<Version>-ci.<run>` and
-kept as a workflow artifact). To release, bump `Version` in `Directory.Build.props`, then push a
-matching tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow checks that the tag and the
-version agree and pushes both packages to nuget.org with
+The templates live in `src/Nite.Templates/content` as ordinary files: `dotnet new` reads them
+through `.template.config/template.json`, and the CLI embeds them for `nite init`. Placeholders
+are `NiteApp` (project file name), `NITE_TITLE`, `NITE_NAMESPACE`, `NITE_PORT` and
+`NITE_VERSION`; `TemplateTests` checks that every placeholder a file uses has a symbol in
+template.json. To try the pack: `dotnet pack src/Nite.Templates -o /tmp/nite-templates` and
+`dotnet new install /tmp/nite-templates/Nite.Templates.<version>.nupkg`.
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds, tests and packs `Nite`,
+`Nite.Cli` and `Nite.Templates` on every push and pull request. The release tag is the version:
+to release 0.6.0, push `v0.6.0` (`git tag v0.6.0 && git push origin v0.6.0`) and the workflow
+packs 0.6.0 and pushes it to nuget.org. Other builds are prereleases of the next patch after the
+newest tag (`0.6.1-ci.<run>`), kept as a workflow artifact. Local builds are `0.0.0-dev`; to try
+one in a project, use `nite init --nite-source`. Publishing uses
 [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): no stored
 API key, just a nuget.org policy for this repository's `ci.yml` and `nuget` environment, and a
 `NUGET_USER` secret with the publishing account's profile name.

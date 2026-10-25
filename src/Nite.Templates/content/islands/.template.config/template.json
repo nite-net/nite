@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Tim McQueen",
+  "classifications": [
+    "Web",
+    "Razor Pages",
+    "React",
+    "TypeScript"
+  ],
+  "identity": "Nite.Templates.Islands",
+  "groupIdentity": "Nite.Islands",
+  "name": "Nite Razor Pages with React islands",
+  "description": "Server-rendered Razor Pages with interactive React islands compiled by Nite. No Node.js toolchain.",
+  "shortName": "nite-islands",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "NiteApp",
+  "preferNameDirectory": true,
+  "defaultName": "NiteApp",
+  "symbols": {
+    "title": {
+      "type": "derived",
+      "valueSource": "name",
+      "valueTransform": "identity",
+      "replaces": "NITE_TITLE"
+    },
+    "namespace": {
+      "type": "derived",
+      "valueSource": "name",
+      "valueTransform": "safe_namespace",
+      "replaces": "NITE_NAMESPACE"
+    },
+    "port": {
+      "type": "generated",
+      "generator": "port",
+      "parameters": {
+        "low": 5100,
+        "high": 5900
+      },
+      "replaces": "NITE_PORT"
+    },
+    "niteVersion": {
+      "type": "generated",
+      "generator": "constant",
+      "parameters": {
+        "value": "NITE_PACKAGE_VERSION"
+      },
+      "replaces": "NITE_VERSION"
+    }
+  },
+  "primaryOutputs": [
+    {
+      "path": "NiteApp.csproj"
+    }
+  ],
+  "postActions": [
+    {
+      "description": "How to run the app",
+      "manualInstructions": [
+        {
+          "text": "Run 'nite watch --browser-refresh' in the project folder. The first run installs the packages in nite.json. Needs the nite tool: dotnet tool install --global Nite.Cli"
+        }
+      ],
+      "actionId": "AC1156F7-BB77-4DB8-B28F-24EEBCCA1E5C",
+      "continueOnError": true
+    }
+  ]
+}

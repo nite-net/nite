@@ -83,10 +83,11 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
 
         var replacements = new Dictionary<string, string>
         {
-            ["__NAME__"] = safeName,
-            ["__NAMESPACE__"] = SafeNamespace(safeName),
-            ["__NITE_REFERENCE__"] = NiteReference(directory, settings.NiteSource),
-            ["__PORT__"] = Random.Shared.Next(5100, 5900).ToString(),
+            [ProjectTemplates.PackageReference] = NiteReference(directory, settings.NiteSource),
+            ["NiteApp"] = safeName,
+            ["NITE_TITLE"] = safeName,
+            ["NITE_NAMESPACE"] = SafeNamespace(safeName),
+            ["NITE_PORT"] = Random.Shared.Next(5100, 5900).ToString(),
         };
 
         if (settings.From is not null)
@@ -127,10 +128,6 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             AnsiConsole.MarkupLine("  nite install");
         }
         AnsiConsole.MarkupLine(template == ProjectTemplates.Spa ? "  nite watch" : "  nite watch --browser-refresh");
-        if (settings.NiteSource is null)
-        {
-            Output.Hint("The project references the Nite NuGet package; until it is published, use --nite-source <path-to-nite-repo>.");
-        }
         return 0;
     }
 
@@ -138,12 +135,11 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
     {
         if (niteSource is null)
         {
-            return $"""
-                  <ItemGroup>
-                    <PackageReference Include="Nite" Version="{Tooling.ShortVersion}" />
-                  </ItemGroup>
-
-                """;
+            if (Tooling.ShortVersion.EndsWith("-dev", StringComparison.Ordinal))
+            {
+                throw new CliException("This nite is a local build, so there is no Nite package of its version to reference. Use --nite-source <path-to-nite-repo>.");
+            }
+            return ProjectTemplates.PackageReference.Replace("NITE_VERSION", Tooling.ShortVersion, StringComparison.Ordinal);
         }
 
         var source = Path.GetFullPath(niteSource);

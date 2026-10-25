@@ -1,0 +1,17 @@
+{
+  // Editor settings only: Nite compiles with esbuild, which strips types without
+  // checking them. Run `tsc --noEmit` in CI for type checking.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "typeRoots": ["../node_modules/@types"]
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}

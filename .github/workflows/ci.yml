@@ -1,14 +1,15 @@
 name: Build and publish
 
-# Every push and pull request builds, tests and packs Nite and Nite.Cli. Pushing a tag such as
-# v0.3.0 also publishes both packages to nuget.org; the tag must match <Version> in
-# Directory.Build.props, so bump that first.
+# Every push and pull request builds, tests and packs Nite, Nite.Cli and Nite.Templates. Pushing a
+# tag such as v0.6.0 also publishes the three packages to nuget.org, as version 0.6.0: the tag is
+# the version, so there is nothing to bump first. Other builds are prereleases of the next patch
+# after the newest tag (0.6.1-ci.<run number>).
 #
 # Publishing uses nuget.org trusted publishing, so no long-lived API key is stored anywhere: the
 # job exchanges a GitHub OIDC token for an API key that is valid for an hour. It needs:
 #   * a trusted publishing policy on nuget.org (Account settings > Trusted Publishing) for
 #     repository owner "nite-net", repository "nite", workflow file "ci.yml" and environment "nuget",
-#     created by the account that owns the Nite and Nite.Cli packages; and
+#     created by the account that owns the Nite, Nite.Cli and Nite.Templates packages; and
 #   * a NUGET_USER secret holding that account's nuget.org profile name (not its email address).
 
 on:
@@ -36,26 +37,32 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The newest tag sets the version of untagged builds. fetch-tags alone does not bring
+          # tags into a shallow pull request checkout, so take the (small) full history.
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
 
-      # Tags publish the version in Directory.Build.props as is. Anything else gets a prerelease
-      # suffix, so CI packages never collide with a release.
       - name: Work out the version
         id: version
         shell: bash
         run: |
-          version=$(dotnet msbuild src/Nite/Nite.csproj -getProperty:Version)
+          semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tag="${GITHUB_REF#refs/tags/v}"
-            if [[ "$tag" != "$version" ]]; then
-              echo "::error::Tag v$tag does not match <Version>$version</Version> in Directory.Build.props."
+            version="${GITHUB_REF#refs/tags/v}"
+            if [[ ! "$version" =~ $semver ]]; then
+              echo "::error::Tag v$version is not a version. Use v<major>.<minor>.<patch>, optionally with a prerelease suffix (v0.6.0, v0.6.0-beta.1)."
               exit 1
             fi
           else
-            version="$version-ci.$GITHUB_RUN_NUMBER"
+            # The next patch after the newest release tag, so CI packages sort after it and before
+            # the release they lead up to.
+            latest=$(git tag --list 'v*' --sort=-v:refname | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+            IFS=. read -r major minor patch <<< "${latest:-0.0.0}"
+            version="$major.$minor.$((patch + 1))-ci.$GITHUB_RUN_NUMBER"
           fi
           echo "Version: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -74,6 +81,7 @@ jobs:
         run: |
           dotnet pack src/Nite -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
           dotnet pack src/Nite.Cli -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/Nite.Templates -c Release -o artifacts -p:Version=${{ steps.version.outputs.version }}
 
       - uses: actions/upload-artifact@v4
         with:
