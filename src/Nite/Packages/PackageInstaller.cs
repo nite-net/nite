@@ -14,8 +14,9 @@ namespace Nite.Packages;
 /// </summary>
 /// <remarks>
 /// Deliberately small: registry packages only (no git, file: or npm: aliases), optional
-/// dependencies are skipped, install scripts never run, and hoisting is "top level unless that
-/// would conflict, otherwise nested under the dependent".
+/// dependencies are skipped, install scripts never run (packages that have one get a warning when
+/// they are resolved), and hoisting is "top level unless that would conflict, otherwise nested
+/// under the dependent".
 /// </remarks>
 public sealed class PackageInstaller
 {
@@ -95,6 +96,7 @@ public sealed class PackageInstaller
         IReadOnlyDictionary<string, List<SemVersion>> preferred, CancellationToken cancellationToken)
     {
         var placed = new SortedDictionary<string, NiteLockedPackage>(StringComparer.Ordinal);
+        var withScripts = new HashSet<string>(StringComparer.Ordinal);
         var queue = new Queue<(string Parent, string Name, string Range, bool IsPeer)>();
         foreach (var (name, range) in requires)
         {
@@ -135,6 +137,8 @@ public sealed class PackageInstaller
                 ?? range.MaxSatisfying(versions)
                 ?? throw new NitePackageException($"No version of '{name}' satisfies '{rangeText}'.");
             var manifest = packument.Versions[chosen.ToString()];
+            if (manifest.HasInstallScript) withScripts.Add(location);
+            else withScripts.Remove(location);
 
             placed[location] = new NiteLockedPackage
             {
@@ -160,6 +164,22 @@ public sealed class PackageInstaller
                 }
                 // Like npm 7+, missing peers are installed; they resolve from where the dependent sits.
                 queue.Enqueue((location, peer, peerRange, true));
+            }
+        }
+
+        // After resolution, once per package, so the messages are not lost among the queue's.
+        var scripted = withScripts.Select(l => (Name: PackageNameAt(l), placed[l].Version)).Distinct()
+            .OrderBy(p => p.Name, StringComparer.Ordinal).ThenBy(p => SemVersion.Parse(p.Version));
+        foreach (var (name, version) in scripted)
+        {
+            var message = InstallScripts.Describe(name, version);
+            if (InstallScripts.IsHarmless(name))
+            {
+                _logger.LogInformation("{Message}", message);
+            }
+            else
+            {
+                _logger.LogWarning("{Message}", message);
             }
         }
 
