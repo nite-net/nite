@@ -1,7 +1,11 @@
 <Project>
-  <!-- Shared by every project in the repository. Bump Version here when tagging a release. -->
+  <!-- Shared by every project in the repository. -->
   <PropertyGroup>
-    <Version>0.5.0</Version>
+    <!--
+      Local builds only. CI sets the version from the release tag (v0.6.0 builds 0.6.0) or, for
+      other builds, the next patch after the newest tag (0.6.1-ci.42). There is nothing to bump.
+    -->
+    <Version>0.0.0-dev</Version>
     <Authors>Tim McQueen</Authors>
     <Copyright>Copyright Tim McQueen</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

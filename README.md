@@ -456,10 +456,11 @@ template.json. To try the pack: `dotnet pack src/Nite.Templates -o /tmp/nite-tem
 `dotnet new install /tmp/nite-templates/Nite.Templates.<version>.nupkg`.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds, tests and packs `Nite`,
-`Nite.Cli` and `Nite.Templates` on every push and pull request (CI packages are versioned `<Version>-ci.<run>` and
-kept as a workflow artifact). To release, bump `Version` in `Directory.Build.props`, then push a
-matching tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow checks that the tag and the
-version agree and pushes the packages to nuget.org with
+`Nite.Cli` and `Nite.Templates` on every push and pull request. The release tag is the version:
+to release 0.6.0, push `v0.6.0` (`git tag v0.6.0 && git push origin v0.6.0`) and the workflow
+packs 0.6.0 and pushes it to nuget.org. Other builds are prereleases of the next patch after the
+newest tag (`0.6.1-ci.<run>`), kept as a workflow artifact. Local builds are `0.0.0-dev`; to try
+one in a project, use `nite init --nite-source`. Publishing uses
 [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): no stored
 API key, just a nuget.org policy for this repository's `ci.yml` and `nuget` environment, and a
 `NUGET_USER` secret with the publishing account's profile name.

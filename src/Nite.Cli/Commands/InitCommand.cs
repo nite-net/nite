@@ -135,6 +135,10 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
     {
         if (niteSource is null)
         {
+            if (Tooling.ShortVersion.EndsWith("-dev", StringComparison.Ordinal))
+            {
+                throw new CliException("This nite is a local build, so there is no Nite package of its version to reference. Use --nite-source <path-to-nite-repo>.");
+            }
             return ProjectTemplates.PackageReference.Replace("NITE_VERSION", Tooling.ShortVersion, StringComparison.Ordinal);
         }
 
