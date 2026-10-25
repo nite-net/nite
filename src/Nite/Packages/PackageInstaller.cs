@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Nite.Configuration;
+using Nite.Observability;
 
 namespace Nite.Packages;
 
@@ -46,6 +47,28 @@ public sealed class PackageInstaller
     public async Task<NiteLockFile> InstallAsync(string projectDirectory, NiteConfig config, CancellationToken cancellationToken = default,
         IReadOnlyCollection<string>? update = null, IReadOnlyDictionary<string, HashSet<string>>? seedVersions = null)
     {
+        using var activity = NiteTelemetry.Source.StartActivity("nite.packages.install");
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            var lockFile = await InstallCoreAsync(projectDirectory, config, update, seedVersions, cancellationToken);
+            activity?.SetTag("nite.packages.count", lockFile.Packages.Count);
+            return lockFile;
+        }
+        catch (Exception ex)
+        {
+            activity.Fail(ex);
+            throw;
+        }
+        finally
+        {
+            NiteTelemetry.InstallDuration.Record(NiteTelemetry.SecondsSince(started));
+        }
+    }
+
+    private async Task<NiteLockFile> InstallCoreAsync(string projectDirectory, NiteConfig config,
+        IReadOnlyCollection<string>? update, IReadOnlyDictionary<string, HashSet<string>>? seedVersions, CancellationToken cancellationToken)
+    {
         // The dev server and `nite install` may run at once; only one of them may touch node_modules.
         await using var installLock = await AcquireInstallLockAsync(projectDirectory, cancellationToken);
 
@@ -84,7 +107,11 @@ public sealed class PackageInstaller
                 }
             }
 
-            lockFile = await ResolveAsync(registry, requires, preferred, cancellationToken);
+            using (var resolve = NiteTelemetry.Source.StartActivity("nite.packages.resolve"))
+            {
+                resolve?.SetTag("nite.packages.requested", requires.Count);
+                lockFile = await ResolveAsync(registry, requires, preferred, cancellationToken);
+            }
             lockFile.Save(lockPath);
         }
 
@@ -201,6 +228,8 @@ public sealed class PackageInstaller
             return;
         }
 
+        using var activity = NiteTelemetry.Source.StartActivity("nite.packages.materialize");
+
         // Remove packages a previous nite install created that the lockfile no longer lists.
         foreach (var stale in previous?.Packages.Except(lockFile.Packages.Keys) ?? [])
         {
@@ -236,6 +265,7 @@ public sealed class PackageInstaller
             });
         }
 
+        activity?.SetTag("nite.packages.installed", installed);
         if (installed > 0)
         {
             _logger.LogInformation("Installed {Count} package(s) into node_modules", installed);

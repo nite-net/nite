@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Nite.Css;
 using Nite.Esbuild;
 using Nite.Html;
+using Nite.Observability;
 using Nite.Runtime;
 
 namespace Nite.Build;
@@ -27,7 +28,27 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, 
 
     public async Task<NiteManifest> BuildAsync(NiteProject project, CancellationToken cancellationToken = default)
     {
+        using var activity = NiteTelemetry.Source.StartActivity("nite.build");
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            var manifest = await BuildCoreAsync(project, started, cancellationToken);
+            activity?.SetTag("nite.build.entries", manifest.Entries.Count);
+            return manifest;
+        }
+        catch (Exception ex)
+        {
+            activity.Fail(ex);
+            throw;
+        }
+        finally
+        {
+            NiteTelemetry.BuildDuration.Record(NiteTelemetry.SecondsSince(started));
+        }
+    }
+
+    private async Task<NiteManifest> BuildCoreAsync(NiteProject project, long started, CancellationToken cancellationToken)
+    {
         var config = project.Config;
 
         // Entry key → (source file, output name without hash).

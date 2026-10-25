@@ -46,8 +46,10 @@ public static class NiteExtensions
             var settings = sp.GetRequiredService<IOptions<NiteOptions>>().Value;
             var environment = sp.GetRequiredService<IWebHostEnvironment>();
             var project = new NiteProject(settings.ProjectDirectory ?? environment.ContentRootPath);
-            return new NiteDevServer(project, Http, sp.GetRequiredService<ILoggerFactory>());
+            return new NiteDevServer(project, Http, sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<NiteHostStarted>().Task);
         });
+        services.TryAddSingleton<NiteHostStarted>();
+        services.AddHostedService(sp => sp.GetRequiredService<NiteHostStarted>());
         services.TryAddSingleton<ProductionAssets>();
         services.TryAddSingleton<INiteAssets>(sp => IsDevelopment(sp)
             ? sp.GetRequiredService<NiteDevServer>()

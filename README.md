@@ -352,6 +352,46 @@ useEffect(() => {
 
 The event never fires in production, so this costs nothing there.
 
+## Telemetry and health checks
+
+Nite reports what it does as OpenTelemetry traces and metrics, through .NET's own
+`ActivitySource` and `Meter` (both named `Nite`), so the library takes no OpenTelemetry dependency
+and costs nothing until something listens. Add the names to your OpenTelemetry setup; in an
+[Aspire](https://aspire.dev) app, that is the ServiceDefaults project:
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing.AddSource(NiteTelemetry.SourceName))   // using Nite.Observability;
+    .WithMetrics(metrics => metrics.AddMeter(NiteTelemetry.MeterName));
+```
+
+| Span | When |
+|---|---|
+| `nite.dev.startup` | The dev server starting: install, initial compiles and pre-bundling, as one trace |
+| `nite.dev.compile`, `nite.dev.stylesheet` | A module or stylesheet compiled on request (a child of the request); cache hits make no span |
+| `nite.css.sass`, `.less`, `.tailwind`, `.postcss` | Each stylesheet tool, under the stylesheet it ran for |
+| `nite.dev.hot_update` | A batch of file changes and what the browser got (`nite.update.kind`: update, css, reload, error) |
+| `nite.dev.prebundle` | Pre-bundling dependencies |
+| `nite.packages.install`, `.resolve`, `.materialize` | Installing packages; resolve only runs when the lockfile changes |
+| `nite.tool.download` | Downloading the esbuild or Dart Sass binary (first run only) |
+| `nite.build` | A production build |
+
+Metrics: `nite.dev.compile.duration` and `nite.dev.compiles` (by `nite.kind` and `nite.cache`),
+`nite.css.tool.duration`, `nite.dev.hot_updates`, `nite.dev.prebundle.duration`,
+`nite.packages.install.duration`, `nite.packages.tarballs` (cache hits and misses) and
+`nite.build.duration`. Failed spans carry the error status and an `exception` event.
+
+A health check reports whether Nite can serve the app:
+
+```csharp
+builder.Services.AddHealthChecks().AddNite();
+```
+
+In development it is Degraded while packages install or dependencies pre-bundle and Unhealthy if
+that failed (a typo in `nite.json`) or `UseNite()` never ran; in production it is Unhealthy if
+`wwwroot/_nite` is missing, which usually means the publish did not run `nite build`. It is a
+readiness check (untagged), so Aspire's `/health` includes it and `/alive` does not.
+
 ## CLI
 
 | Command | Aliases | What it does |
