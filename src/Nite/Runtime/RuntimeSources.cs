@@ -9,6 +9,10 @@ internal static class RuntimeSources
     public static string ReactRenderer { get; } = Read("react-renderer.js");
     public static string DevClient { get; } = Read("client.js");
     public static string RefreshRuntime { get; } = Read("refresh.js");
+    public static string ClientConfig { get; } = Read("config.js");
+
+    /// <summary>The import that gives client code <see cref="NiteOptions.ClientConfig"/>'s values.</summary>
+    public const string ClientConfigSpecifier = "nite:config";
 
     /// <summary>Bare imports the built-in React renderer needs pre-bundled.</summary>
     public static readonly string[] ReactRendererImports = ["react", "react-dom/client"];

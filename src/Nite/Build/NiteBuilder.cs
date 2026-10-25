@@ -154,7 +154,7 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, 
             Entries = entries.Values.Select(e => new EsbuildEntry(e.File, e.OutputName)).ToList(),
             Flags = flags,
             Metafile = true,
-            Plugins = [stylesheets.CreatePlugin(NiteEnvironment.Production)],
+            Plugins = [stylesheets.CreatePlugin(NiteEnvironment.Production), ClientConfigPlugin()],
         }, cancellationToken);
 
         foreach (var warning in result.Warnings)
@@ -218,6 +218,17 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, 
     /// would leave nesting and other new syntax (which Tailwind emits) as is. Add the browsers
     /// Vite targets by default ("baseline widely available") unless the config names browsers.
     /// </summary>
+    /// <summary>Supplies <c>nite:config</c>, which reads the values the server writes into each page.</summary>
+    private static EsbuildPlugin ClientConfigPlugin()
+    {
+        var plugin = new EsbuildPlugin { Name = "nite-config" };
+        plugin.OnResolve.Add(new EsbuildOnResolve($"^{RuntimeSources.ClientConfigSpecifier}$", "", _ =>
+            Task.FromResult<EsbuildResolveResult?>(new EsbuildResolveResult { Path = "config", Namespace = "nite" })));
+        plugin.OnLoad.Add(new EsbuildOnLoad(".*", "nite", _ =>
+            Task.FromResult<EsbuildLoadResult?>(new EsbuildLoadResult { Contents = RuntimeSources.ClientConfig, Loader = "js" })));
+        return plugin;
+    }
+
     internal static string BuildTarget(string target) =>
         target.Split(',').All(t => t.Trim().StartsWith("es", StringComparison.OrdinalIgnoreCase))
             ? target + ",chrome107,edge107,firefox104,safari16"

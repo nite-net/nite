@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Nite;
 using Nite.Observability;
 using OpenTelemetry.Metrics;
@@ -8,7 +9,22 @@ var builder = WebApplication.CreateBuilder(args);
 // Service discovery, resilience, health checks and OpenTelemetry, shared with the API.
 builder.AddServiceDefaults();
 
-builder.Services.AddNite();
+builder.Services.AddNite(options => options.ClientConfig = context => new
+{
+    // Set by the AppHost when Application Insights is configured. Read when each page is served,
+    // not when the client was built, so one build runs anywhere.
+    AppInsights = context.RequestServices.GetRequiredService<IConfiguration>()["APPLICATIONINSIGHTS_CONNECTION_STRING"],
+
+    // Context about this request, as the server saw it. The trace id lets the browser's telemetry
+    // join the trace of the request that served the page.
+    Server = new
+    {
+        Environment = context.RequestServices.GetRequiredService<IWebHostEnvironment>().EnvironmentName,
+        Machine = Environment.MachineName,
+        TraceId = Activity.Current?.TraceId.ToString(),
+        RenderedAt = DateTimeOffset.UtcNow,
+    },
+});
 
 // Nite's spans, metrics and health check, on top of what ServiceDefaults sets up. They live here
 // rather than in ServiceDefaults because the API service does not use Nite.

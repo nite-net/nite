@@ -243,6 +243,9 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             case "/runtime/renderer.js":
                 await WriteAsync(context, RuntimeSources.RendererForDev(_project), "text/javascript");
                 return;
+            case "/runtime/config.js":
+                await WriteAsync(context, RuntimeSources.ClientConfig, "text/javascript");
+                return;
         }
 
         try
@@ -635,6 +638,11 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var discovered = false;
         foreach (var specifier in ImportScanner.FindSpecifiers(result.Code))
         {
+            if (specifier == RuntimeSources.ClientConfigSpecifier)
+            {
+                // Nite's own module, mapped in the import map; not a package.
+                continue;
+            }
             if (ResolveImport(file, specifier) is { } target)
             {
                 imports.Add(target);
@@ -709,7 +717,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             _ when path.StartsWith("/src/", StringComparison.Ordinal) => "/src/{**path}",
             _ when path.StartsWith("/deps/", StringComparison.Ordinal) => "/deps/{file}",
             _ when path.StartsWith("/npm/", StringComparison.Ordinal) => "/npm/{**specifier}",
-            "/ws" or "/client.js" or "/refresh.js" or "/runtime/islands.js" or "/runtime/renderer.js" => path,
+            "/ws" or "/client.js" or "/refresh.js" or "/runtime/islands.js" or "/runtime/renderer.js" or "/runtime/config.js" => path,
             _ => "/{**path}",
         };
         activity.DisplayName = $"{context.Request.Method} {route}";
@@ -1415,6 +1423,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
         var basePath = context.Request.PathBase + NiteProject.BasePath;
         var imports = _dependencies.Imports.ToDictionary(pair => pair.Key, pair => $"{basePath}/{pair.Value}");
+        imports[RuntimeSources.ClientConfigSpecifier] = $"{basePath}/runtime/config.js";
         var scripts = new List<string>();
         if (_refreshEnabled)
         {

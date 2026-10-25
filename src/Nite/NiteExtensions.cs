@@ -26,6 +26,23 @@ public sealed class NiteOptions
 
     /// <summary>The folder holding <c>nite.json</c>. Defaults to the content root.</summary>
     public string? ProjectDirectory { get; set; }
+
+    /// <summary>
+    /// Values for client code, worked out per request when a page is served and read with
+    /// <c>import { config } from "nite:config"</c>. Unlike <c>NITE_PUBLIC_</c> variables, which are
+    /// inlined when code is compiled, these come from the running server: settings that differ
+    /// between environments (an Application Insights connection string, an API's URL), or context
+    /// about the request (the signed-in user's name, a feature flag). They are serialized as camelCase
+    /// JSON into the page, so return only what the browser may see.
+    /// </summary>
+    /// <remarks>
+    /// <c>MapNiteSpa</c> and the <c>&lt;nite-head /&gt;</c> tag helper write them. Pages that carry
+    /// them are sent with <c>Cache-Control: private</c>, since they may differ per user.
+    /// </remarks>
+    public Func<HttpContext, object?>? ClientConfig { get; set; }
+
+    /// <summary>Like <see cref="ClientConfig"/>, for values that take awaiting. Set one or the other.</summary>
+    public Func<HttpContext, Task<object?>>? ClientConfigAsync { get; set; }
 }
 
 public static class NiteExtensions
@@ -100,8 +117,14 @@ public static class NiteExtensions
 
             var assets = context.RequestServices.GetRequiredService<INiteAssets>();
             var html = await assets.GetHtmlAsync(page, context);
-            // Never cache the page itself: it is what points at the current hashed bundles.
-            context.Response.Headers.CacheControl = "no-cache";
+            var config = await NiteClientConfig.RenderAsync(context);
+            if (config is not null)
+            {
+                html = Html.HtmlDocument.InjectHead(html, config);
+            }
+            // Never cache the page itself: it is what points at the current hashed bundles. With
+            // client config it may also be someone's own, so no shared cache may keep it either.
+            context.Response.Headers.CacheControl = config is null ? "no-cache" : "private, no-cache";
             context.Response.ContentType = "text/html; charset=utf-8";
             await context.Response.WriteAsync(html);
         });

@@ -33,3 +33,17 @@ blockquote {
 .error {
   color: #c62828;
 }
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dt {
+  opacity: 0.7;
+}
+
+dd {
+  margin: 0;
+}

@@ -204,6 +204,28 @@ variants) in the project folder, and from the process environment, are inlined i
 or `process.env.NITE_PUBLIC_API` (as in Create React App). Anything else in `.env`, such as database
 passwords, never reaches the browser. Editing a `.env` file reloads the page with the new values.
 
+Those values are inlined when code is compiled, so a production build carries whatever was set when
+`nite build` ran. For values that differ per environment or per request (an Application Insights
+connection string, the signed-in user's name, a feature flag), let the server hand them over when it
+serves the page:
+
+```csharp
+builder.Services.AddNite(options => options.ClientConfig = context => new
+{
+    AppInsights = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"],
+    User = context.User.Identity?.Name,
+});
+```
+
+```ts
+import { config } from "nite:config";   // { appInsights, user }, as of this page load
+```
+
+`MapNiteSpa` and `<nite-head />` write the values into the page as JSON (pages that carry them are
+sent `Cache-Control: private`), so one build runs in every environment. Describe their shape in
+`Client/nite-env.d.ts`, which `nite init` creates. `ClientConfigAsync` takes an async callback.
+[`samples/Nite.Aspire`](samples/Nite.Aspire) uses it to start Application Insights in the browser.
+
 `compilerOptions.paths` in the client's tsconfig (following `extends` and Vite's `references` to
 `tsconfig.app.json`) work in development and production, so `import { cn } from "@/lib/utils"`
 resolves as it does in your editor.

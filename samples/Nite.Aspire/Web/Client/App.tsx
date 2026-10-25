@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { config } from "nite:config";
+import { trackEvent } from "./telemetry";
 
 type Quote = { text: string; author: string; server: string };
 
@@ -36,7 +38,34 @@ export function App() {
       ) : (
         <p className="muted">Asking the API…</p>
       )}
-      <button onClick={load}>Another one</button>
+      <button
+        onClick={() => {
+          trackEvent("quote-requested");
+          load();
+        }}
+      >
+        Another one
+      </button>
+      <h2>From the server, when this page was served</h2>
+      <p className="muted">
+        Values from <code>NiteOptions.ClientConfig</code> in <code>Program.cs</code>, read here with{" "}
+        <code>import {"{ config }"} from "nite:config"</code>. They come from the running server, so they can
+        differ per environment and per request without rebuilding the client.
+      </p>
+      <dl>
+        <dt>Environment</dt>
+        <dd>{config.server.environment}</dd>
+        <dt>Machine</dt>
+        <dd>{config.server.machine}</dd>
+        <dt>Rendered at</dt>
+        <dd>{new Date(config.server.renderedAt).toLocaleString()}</dd>
+        <dt>Trace</dt>
+        <dd>
+          <code>{config.server.traceId ?? "none"}</code>
+        </dd>
+        <dt>Application Insights</dt>
+        <dd>{config.appInsights ? "on" : "off (no connection string in the AppHost)"}</dd>
+      </dl>
     </main>
   );
 }
