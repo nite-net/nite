@@ -78,6 +78,7 @@ To work on Nite itself, point new projects at a checkout instead of the NuGet pa
 ```bash
 cd samples/Nite.Spa && nite watch                        # React SPA + minimal API
 cd samples/Nite.Sample && nite watch --browser-refresh   # Razor Pages with React islands
+dotnet run --project samples/Nite.Aspire/AppHost         # the SPA and an API under Aspire
 ```
 
 The first run downloads esbuild and the packages in `nite.json` (a few seconds); after that,
@@ -356,13 +357,13 @@ The event never fires in production, so this costs nothing there.
 
 Nite reports what it does as OpenTelemetry traces and metrics, through .NET's own
 `ActivitySource` and `Meter` (both named `Nite`), so the library takes no OpenTelemetry dependency
-and costs nothing until something listens. Add the names to your OpenTelemetry setup; in an
-[Aspire](https://aspire.dev) app, that is the ServiceDefaults project:
+and costs nothing until something listens. Add the names to your OpenTelemetry setup, for
+example in the web project of an [Aspire](https://aspire.dev) app, next to `AddServiceDefaults()`:
 
 ```csharp
-builder.Services.AddOpenTelemetry()
-    .WithTracing(tracing => tracing.AddSource(NiteTelemetry.SourceName))   // using Nite.Observability;
-    .WithMetrics(metrics => metrics.AddMeter(NiteTelemetry.MeterName));
+// using Nite.Observability; using OpenTelemetry.Metrics; using OpenTelemetry.Trace;
+builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddSource(NiteTelemetry.SourceName));
+builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddMeter(NiteTelemetry.MeterName));
 ```
 
 | Span | When |
@@ -380,6 +381,10 @@ Metrics: `nite.dev.compile.duration` and `nite.dev.compiles` (by `nite.kind` and
 `nite.css.tool.duration`, `nite.dev.hot_updates`, `nite.dev.prebundle.duration`,
 `nite.packages.install.duration`, `nite.packages.tarballs` (cache hits and misses) and
 `nite.build.duration`. Failed spans carry the error status and an `exception` event.
+
+Requests Nite serves under `/_nite` are named after their route (`GET /_nite/src/{**path}`), as
+routing names endpoints. [`samples/Nite.Aspire`](samples/Nite.Aspire) shows all of this in the Aspire
+dashboard.
 
 A health check reports whether Nite can serve the app:
 

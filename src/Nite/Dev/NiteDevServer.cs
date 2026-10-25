@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -224,6 +225,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     public async Task HandleAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? "/";
+        NameRequest(context, path);
         switch (path)
         {
             case "/ws":
@@ -689,6 +691,29 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var module = new CachedModule(stamp, code, missing.ToList(), refresh.IsBoundary);
         _modules[file] = module;
         return module;
+    }
+
+    /// <summary>
+    /// Names the request's span after its route, as routing does for endpoints. Requests under
+    /// /_nite never reach routing, so traces would otherwise list each of them as just "GET".
+    /// </summary>
+    private static void NameRequest(HttpContext context, string path)
+    {
+        if (context.Features.Get<IHttpActivityFeature>()?.Activity is not { IsAllDataRequested: true } activity)
+        {
+            return;
+        }
+
+        var route = NiteProject.BasePath + path switch
+        {
+            _ when path.StartsWith("/src/", StringComparison.Ordinal) => "/src/{**path}",
+            _ when path.StartsWith("/deps/", StringComparison.Ordinal) => "/deps/{file}",
+            _ when path.StartsWith("/npm/", StringComparison.Ordinal) => "/npm/{**specifier}",
+            "/ws" or "/client.js" or "/refresh.js" or "/runtime/islands.js" or "/runtime/renderer.js" => path,
+            _ => "/{**path}",
+        };
+        activity.DisplayName = $"{context.Request.Method} {route}";
+        activity.SetTag("http.route", route);
     }
 
     private static void CountCompile(string kind, bool hit) =>

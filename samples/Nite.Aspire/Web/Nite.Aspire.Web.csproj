@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Nite.Aspire.Web</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ServiceDefaults\Nite.Aspire.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\..\src\Nite\Nite.csproj" />
+    <!-- Built first so Release builds can run `nite build`; not referenced as an assembly. -->
+    <ProjectReference Include="..\..\..\src\Nite.Cli\Nite.Cli.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <NiteCliPath>$(MSBuildThisFileDirectory)..\..\..\src\Nite.Cli\bin\$(Configuration)\net10.0\Nite.Cli.dll</NiteCliPath>
+  </PropertyGroup>
+
+  <Import Project="..\..\..\build\Nite.targets" />
+
+</Project>
