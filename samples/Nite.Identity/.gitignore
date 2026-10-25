@@ -1,0 +1,4 @@
+# The SQLite database the app creates on first run.
+app.db
+app.db-shm
+app.db-wal

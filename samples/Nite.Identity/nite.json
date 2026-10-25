@@ -1,0 +1,13 @@
+{
+  // Two single-page apps: Client/index.html (the app) is automatic; the login page is listed here.
+  "clientRoot": "Client",
+  "entries": ["login/index.html"],
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}

@@ -1,0 +1,145 @@
+:root {
+  color-scheme: light dark;
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  --accent: #4b5bdc;
+  --border: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+main {
+  max-width: 760px;
+  margin: 3rem auto;
+  padding: 0 16px;
+}
+
+main.narrow {
+  max-width: 380px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+section {
+  margin-top: 2.5rem;
+}
+
+.muted {
+  opacity: 0.7;
+}
+
+.error {
+  color: #c62828;
+}
+
+.notice {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+form.row {
+  grid-template-columns: 1fr auto;
+}
+
+label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+label.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+input:not([type="checkbox"]) {
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 0;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+}
+
+button.secondary {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+}
+
+button.link {
+  background: none;
+  color: inherit;
+  padding: 0 0.25rem;
+  opacity: 0.6;
+}
+
+.notes {
+  list-style: none;
+  padding: 0;
+}
+
+.notes li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.notes time {
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+td,
+th {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+td.type {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  opacity: 0.75;
+  width: 45%;
+}
+
+pre.token {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}

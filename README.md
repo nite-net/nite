@@ -79,6 +79,7 @@ To work on Nite itself, point new projects at a checkout instead of the NuGet pa
 cd samples/Nite.Spa && nite watch                        # React SPA + minimal API
 cd samples/Nite.Sample && nite watch --browser-refresh   # Razor Pages with React islands
 dotnet run --project samples/Nite.Aspire/AppHost         # the SPA and an API under Aspire
+cd samples/Nite.Identity && nite watch                   # Identity sign-in: a login SPA and a protected SPA
 ```
 
 The first run downloads esbuild and the packages in `nite.json` (a few seconds); after that,
@@ -111,7 +112,9 @@ app.MapNiteSpa();                    // index.html for "/" and client-side route
 `MapNiteSpa` is a fallback route, so real endpoints always win. It never answers under `/api`
 (pass `apiPrefix` to change that), so a mistyped API call gets a 404, not a page of HTML. In
 development it serves `Client/index.html` with the dev client injected; in production, the built
-copy with hashed URLs.
+copy with hashed URLs. For more than one app, give each its own path:
+`app.MapNiteSpa("login/index.html", path: "/login")` answers `/login` and everything under it,
+next to the catch-all `app.MapNiteSpa()` ([`samples/Nite.Identity`](samples/Nite.Identity)).
 
 ### Islands in Razor pages
 

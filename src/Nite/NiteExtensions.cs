@@ -104,9 +104,14 @@ public static class NiteExtensions
     /// In development the page is read from source on every request with the dev client injected;
     /// in production it is the built copy from <c>wwwroot/_nite</c>.
     /// </remarks>
-    public static IEndpointConventionBuilder MapNiteSpa(this IEndpointRouteBuilder endpoints, string page = "index.html", string? apiPrefix = "/api")
+    /// <param name="path">
+    /// Serve the page only under this path: <c>"/login"</c> answers <c>/login</c> and
+    /// <c>/login/…</c>. An app can map several single-page apps this way, plus one without a path
+    /// for everything else; the more specific path wins.
+    /// </param>
+    public static IEndpointConventionBuilder MapNiteSpa(this IEndpointRouteBuilder endpoints, string page = "index.html", string? apiPrefix = "/api", string? path = null)
     {
-        return endpoints.MapFallback(async context =>
+        RequestDelegate serve = async context =>
         {
             if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method)
                 || (apiPrefix is not null && context.Request.Path.StartsWithSegments(apiPrefix)))
@@ -127,7 +132,11 @@ public static class NiteExtensions
             context.Response.Headers.CacheControl = config is null ? "no-cache" : "private, no-cache";
             context.Response.ContentType = "text/html; charset=utf-8";
             await context.Response.WriteAsync(html);
-        });
+        };
+
+        return path is null
+            ? endpoints.MapFallback(serve)
+            : endpoints.MapFallback($"{path.TrimEnd('/')}/{{**clientPath:nonfile}}", serve);
     }
 
     /// <summary>

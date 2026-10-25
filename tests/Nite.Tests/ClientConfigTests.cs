@@ -135,3 +135,57 @@ public class ClientConfigIntegrationTests : IDisposable
         await app.StopAsync();
     }
 }
+
+public class MapNiteSpaTests : IDisposable
+{
+    private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("nite-spa-routes-");
+
+    public void Dispose() => _root.Delete(recursive: true);
+
+    [Theory]
+    [InlineData("/", "main app")]
+    [InlineData("/todos/3", "main app")]
+    [InlineData("/login", "login app")]
+    [InlineData("/login/", "login app")]
+    [InlineData("/login/forgot", "login app")]
+    [InlineData("/loginx", "main app")]
+    [InlineData("/api/missing", null)]
+    [InlineData("/login/logo.png", null)]
+    public async Task Serves_each_spa_under_its_own_path(string url, string? expected)
+    {
+        Write("wwwroot/_nite/index.html", "<html><head></head><body>main app</body></html>");
+        Write("wwwroot/_nite/login/index.html", "<html><head></head><body>login app</body></html>");
+        Write("wwwroot/_nite/manifest.json", "{\"html\":{\"index.html\":\"index.html\",\"login/index.html\":\"login/index.html\"}}");
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { ContentRootPath = _root.FullName, EnvironmentName = "Production" });
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddNite();
+        await using var app = builder.Build();
+        app.UseNite();
+        app.MapNiteSpa("login/index.html", path: "/login");
+        app.MapNiteSpa();
+        await app.StartAsync();
+
+        var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
+        using var http = new HttpClient { BaseAddress = new Uri(address) };
+        using var response = await http.GetAsync(url);
+
+        if (expected is null)
+        {
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+        }
+        else
+        {
+            Assert.Contains(expected, await response.Content.ReadAsStringAsync());
+        }
+        await app.StopAsync();
+    }
+
+    private void Write(string relative, string text)
+    {
+        var path = Path.Combine(_root.FullName, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, text);
+    }
+}
