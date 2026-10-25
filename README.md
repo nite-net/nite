@@ -440,7 +440,10 @@ dotnet test --filter "Category!=Integration"         # offline
 `Nite.Cli` on every push and pull request (CI packages are versioned `<Version>-ci.<run>` and
 kept as a workflow artifact). To release, bump `Version` in `Directory.Build.props`, then push a
 matching tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow checks that the tag and the
-version agree and pushes both packages to nuget.org, using the `NUGET_API_KEY` secret.
+version agree and pushes both packages to nuget.org with
+[trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): no stored
+API key, just a nuget.org policy for this repository's `ci.yml` and `nuget` environment, and a
+`NUGET_USER` secret with the publishing account's profile name.
 
 Environment variables: see [Configuration](#configuration) for the directory and registry
 variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2),
