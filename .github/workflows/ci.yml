@@ -1,0 +1,99 @@
+name: Build and publish
+
+# Every push and pull request builds, tests and packs Nite and Nite.Cli. Pushing a tag such as
+# v0.3.0 also publishes both packages to nuget.org; the tag must match <Version> in
+# Directory.Build.props, so bump that first.
+#
+# Publishing needs a NUGET_API_KEY repository secret: an nuget.org API key with the "Push" scope
+# for the Nite and Nite.Cli package IDs.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Tags publish the version in Directory.Build.props as is. Anything else gets a prerelease
+      # suffix, so CI packages never collide with a release.
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          version=$(dotnet msbuild src/Nite/Nite.csproj -getProperty:Version)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/v}"
+            if [[ "$tag" != "$version" ]]; then
+              echo "::error::Tag v$tag does not match <Version>$version</Version> in Directory.Build.props."
+              exit 1
+            fi
+          else
+            version="$version-ci.$GITHUB_RUN_NUMBER"
+          fi
+          echo "Version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore tests/Nite.Tests
+
+      - name: Build
+        run: dotnet build tests/Nite.Tests -c Release --no-restore -p:Version=${{ steps.version.outputs.version }}
+
+      # Includes the integration tests, which download esbuild, Sass and a few npm packages.
+      - name: Test
+        run: dotnet test tests/Nite.Tests -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Pack
+        run: |
+          dotnet pack src/Nite -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/Nite.Cli -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: artifacts
+
+      # --skip-duplicate makes a re-run after a partial failure safe.
+      - name: Push to nuget.org
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}

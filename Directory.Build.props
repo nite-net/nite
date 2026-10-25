@@ -5,7 +5,7 @@
     <Authors>Tim McQueen</Authors>
     <Copyright>Copyright Tim McQueen</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/tmcqueen/nite</RepositoryUrl>
+    <RepositoryUrl>https://github.com/nite-net/nite</RepositoryUrl>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

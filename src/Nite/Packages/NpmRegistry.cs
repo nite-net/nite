@@ -223,6 +223,12 @@ public sealed class NpmVersion
     public Dictionary<string, string>? OptionalDependencies { get; init; }
     public Dictionary<string, string>? PeerDependencies { get; init; }
     public Dictionary<string, NpmPeerMeta>? PeerDependenciesMeta { get; init; }
+
+    /// <summary>
+    /// Set by the registry when the package has a preinstall, install or postinstall script (or a
+    /// binding.gyp, which implies one). Nite never runs them.
+    /// </summary>
+    public bool HasInstallScript { get; init; }
     public NpmDist Dist { get; init; } = new();
 }
 

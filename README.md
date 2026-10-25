@@ -160,6 +160,24 @@ Use `nite add` / `nite rm` rather than editing by hand (comments in the file are
 `dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
 Commit `nite.lock.json`.
 
+### Install scripts
+
+Nite never runs `preinstall`, `install` or `postinstall` scripts: they are arbitrary code, and
+most of them build or download things for Node.js, which a browser has no use for. When a
+package that has one is resolved (the registry marks it with `hasInstallScript`), Nite says so
+once, after resolving, with a clearer message for the usual suspects:
+
+| Package | What Nite says |
+|---|---|
+| `core-js`, `core-js-pure`, `es5-ext` | The script only prints a message; nothing is missing. |
+| `esbuild` | The script fetches the esbuild binary, which Nite downloads and runs itself. |
+| `node-sass` | Warning: it builds LibSass. Nite compiles Sass with Dart Sass's native binary; use `sass` instead. |
+| `bcrypt`, `better-sqlite3`, `sqlite3`, `argon2`, `canvas` | Warning: a native Node.js addon, which cannot run in a browser. Do that work in ASP.NET Core. |
+| anything else | Warning: the package may not work if it needs its script to download or build something. |
+
+The messages appear when the lockfile is resolved (`nite add`, `nite update`, a changed
+`nite.json`), not on every install from a current `nite.lock.json`.
+
 `dotnet publish` runs `nite build` through the targets in the Nite package, using the `nite` tool.
 Set `NiteCommand` (for example to `dotnet tool run nite` for a local tool), or `NiteBuildEnabled`
 to `false` to skip it.
@@ -400,7 +418,8 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
 - **No SSR of islands.** Islands render on the client; use the fallback content for the
   server-side picture.
 - **Registry packages only**: no git, `file:` or `npm:` alias dependencies. Optional dependencies
-  are skipped and install scripts never run, so packages that need a postinstall step won't work.
+  are skipped and install scripts never run, so packages that need a postinstall step won't work
+  (Nite warns about them; see [Install scripts](#install-scripts)).
 - **Not yet:** Stylus, `import.meta.glob`, Vite's `?raw`/`?url`/`?worker` imports, CSS modules'
   `localsConvention`, and CSS that a package's own JavaScript imports (import its stylesheet from
   your code instead, as Mantine does). The importer warns about each of these when a project uses
@@ -416,6 +435,12 @@ dotnet build
 dotnet test                                          # includes esbuild and stylesheet integration tests (needs network)
 dotnet test --filter "Category!=Integration"         # offline
 ```
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds, tests and packs `Nite` and
+`Nite.Cli` on every push and pull request (CI packages are versioned `<Version>-ci.<run>` and
+kept as a workflow artifact). To release, bump `Version` in `Directory.Build.props`, then push a
+matching tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow checks that the tag and the
+version agree and pushes both packages to nuget.org, using the `NUGET_API_KEY` secret.
 
 Environment variables: see [Configuration](#configuration) for the directory and registry
 variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must be version 0.28.2),
