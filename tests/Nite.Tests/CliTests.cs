@@ -158,3 +158,24 @@ public class InitNamingTests
         Assert.Equal(ns, InitCommand.SafeNamespace(safe));
     }
 }
+
+public class WatchCommandTests
+{
+    [Fact]
+    public void Turns_off_dotnet_watch_refresh_and_restarts_on_edits_that_need_it()
+    {
+        var environment = WatchCommand.WatchEnvironment(new WatchSettings(), _ => null);
+        Assert.Equal("1", environment["DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH"]);
+        Assert.Equal("1", environment["DOTNET_WATCH_RESTART_ON_RUDE_EDIT"]);
+    }
+
+    [Fact]
+    public void Leaves_variables_the_user_set_and_honors_the_opt_outs()
+    {
+        var userSet = WatchCommand.WatchEnvironment(new WatchSettings(), name => name == "DOTNET_WATCH_RESTART_ON_RUDE_EDIT" ? "false" : null);
+        Assert.False(userSet.ContainsKey("DOTNET_WATCH_RESTART_ON_RUDE_EDIT"));
+
+        var optedOut = WatchCommand.WatchEnvironment(new WatchSettings { BrowserRefresh = true, NoAutoRestart = true }, _ => null);
+        Assert.Empty(optedOut);
+    }
+}

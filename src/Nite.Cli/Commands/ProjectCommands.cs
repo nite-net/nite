@@ -65,13 +65,24 @@ internal sealed class WatchSettings : ProjectSettings
     [CommandOption("--browser-refresh")]
     [Description("Keep dotnet watch's own browser refresh (reloads the page after every C# change). Useful for Razor pages; off by default so single-page apps keep their state.")]
     public bool BrowserRefresh { get; set; }
+
+    [CommandOption("--no-auto-restart")]
+    [Description("Let dotnet watch ask (or wait for Ctrl+R) when an edit needs a restart, instead of restarting the app automatically.")]
+    public bool NoAutoRestart { get; set; }
 }
 
 /// <summary>
 /// <c>nite watch</c>: <c>dotnet watch</c> with its browser refresh script turned off, so Nite's
-/// own client handles the browser (Fast Refresh, server-update events, reload after restarts).
-/// Anything after <c>--</c> goes to dotnet watch.
+/// own client handles the browser (Fast Refresh, server-update events, reload after restarts),
+/// and with edits that need a restart restarting the app. Anything after <c>--</c> goes to dotnet watch.
 /// </summary>
+/// <remarks>
+/// Without <c>DOTNET_WATCH_RESTART_ON_RUDE_EDIT</c>, an interactive dotnet watch treats some
+/// edits that cannot take effect as warnings: adding an endpoint to top-level code in Program.cs
+/// reports ENC0118 ("might not have any effect until the application is restarted"), applies an
+/// update that changes nothing (Main already ran), and waits for Ctrl+R. The page then calls an
+/// endpoint that does not exist. With the variable set, it restarts, and Nite reloads the page.
+/// </remarks>
 internal sealed class WatchCommand : AsyncCommand<WatchSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, WatchSettings settings, CancellationToken cancellationToken)
@@ -82,15 +93,26 @@ internal sealed class WatchCommand : AsyncCommand<WatchSettings>
             throw new CliException($"No .csproj in {Markup.Escape(directory)}. Run nite watch from the project folder or pass --dir.");
         }
 
+        var environment = WatchEnvironment(settings, System.Environment.GetEnvironmentVariable);
+        var arguments = context.Remaining.Raw.ToList();
+        var shown = environment.Count == 0 ? "" : "  (" + string.Join(' ', environment.Select(e => $"{e.Key}={e.Value}")) + ")";
+        Output.Hint($"dotnet watch {string.Join(' ', arguments)}{Markup.Escape(shown)}");
+        return await ExternalProcess.RunAsync(ExternalProcess.Dotnet, ["watch", .. arguments], directory, environment, cancellationToken);
+    }
+
+    /// <summary>The variables nite watch sets for dotnet watch; one the user already set is left alone.</summary>
+    internal static Dictionary<string, string> WatchEnvironment(WatchSettings settings, Func<string, string?> current)
+    {
         var environment = new Dictionary<string, string>();
-        if (!settings.BrowserRefresh)
+        if (!settings.BrowserRefresh && current("DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH") is null)
         {
             environment["DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH"] = "1";
         }
-
-        var arguments = context.Remaining.Raw.ToList();
-        Output.Hint($"dotnet watch {string.Join(' ', arguments)}{(settings.BrowserRefresh ? "" : "  (DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1)")}");
-        return await ExternalProcess.RunAsync(ExternalProcess.Dotnet, ["watch", .. arguments], directory, environment, cancellationToken);
+        if (!settings.NoAutoRestart && current("DOTNET_WATCH_RESTART_ON_RUDE_EDIT") is null)
+        {
+            environment["DOTNET_WATCH_RESTART_ON_RUDE_EDIT"] = "1";
+        }
+        return environment;
     }
 }
 

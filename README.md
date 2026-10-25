@@ -289,13 +289,21 @@ Next.js, Remix and Astro apps have their own servers and are out of scope.
 | A component that uses a new Tailwind class (or a Razor view) | The Tailwind stylesheet is rebuilt and swapped in. |
 | The entry (`main.tsx`) or `index.html` | Page reloads. |
 | C# that hot reload can apply | Applied in the running app; the browser gets a `nite:server-update` event. |
-| C# that needs a restart (new endpoint in `Program.cs`, say) | dotnet watch restarts the app; the page waits for it and reloads (about 10 s). |
+| C# that needs a restart (new endpoint in `Program.cs`, say) | dotnet watch restarts the app without asking; the page waits for it and reloads (about 10 s). |
 
 Plain `dotnet watch` injects its own browser script, which reloads the page after **every** C#
 change. That suits Razor pages, but in a single-page app it throws away client state for an
 API-only change. `nite watch` turns it off (`DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1`, which only
 works from the environment, not `launchSettings.json`) and Nite takes over, reloading after
 restarts by itself. For Razor pages, keep dotnet's refresh with `nite watch --browser-refresh`.
+
+It also sets `DOTNET_WATCH_RESTART_ON_RUDE_EDIT=1`. Without it, an interactive dotnet watch handles
+some edits that cannot take effect as warnings rather than restarts: add an endpoint to the
+top-level code in `Program.cs` and it reports ENC0118 ("might not have any effect until the
+application is restarted"), applies an update that changes nothing (that code already ran), and
+waits for Ctrl+R, while the page calls an endpoint that does not exist yet. Edits hot reload can
+apply are still applied in place. `nite watch --no-auto-restart` keeps dotnet watch's prompt, and
+a value you set for either variable yourself is left alone.
 Arguments after `--` go to dotnet watch: `nite watch -- --launch-profile https`.
 
 Let pages re-fetch when server code changes:
@@ -324,7 +332,7 @@ The event never fires in production, so this costs nothing there.
 | `nite list` | `ls` | Direct packages with their ranges and installed versions; `--all` adds transitive ones. |
 | `nite update [pkg...]` | `up` | Show current, wanted and latest versions, then update within the ranges. `--check` only reports; `--latest` moves the ranges to the latest versions. |
 | `nite build` | | Production build into `wwwroot/_nite` (publish runs this). |
-| `nite watch` | | `dotnet watch` with Nite handling the browser; see above. |
+| `nite watch` | | `dotnet watch` with Nite handling the browser and restarts automatic; `--browser-refresh`, `--no-auto-restart`. See above. |
 | `nite config list` | `config ls` | Effective settings; `--show-origin` shows which file or variable each comes from. |
 | `nite config get\|set\|unset <key>` | | Read or change the user config (`registry`, `@scope:registry`, `init.template`). `config path` prints its location. |
 | `nite cache dir\|clean\|verify` | | Where the cache is; delete it; check cached tarballs and drop corrupt ones. |
