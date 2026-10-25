@@ -46,10 +46,8 @@ public static class NiteExtensions
             var settings = sp.GetRequiredService<IOptions<NiteOptions>>().Value;
             var environment = sp.GetRequiredService<IWebHostEnvironment>();
             var project = new NiteProject(settings.ProjectDirectory ?? environment.ContentRootPath);
-            return new NiteDevServer(project, Http, sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<NiteHostStarted>().Task);
+            return new NiteDevServer(project, Http, sp.GetRequiredService<ILoggerFactory>());
         });
-        services.TryAddSingleton<NiteHostStarted>();
-        services.AddHostedService(sp => sp.GetRequiredService<NiteHostStarted>());
         services.TryAddSingleton<ProductionAssets>();
         services.TryAddSingleton<INiteAssets>(sp => IsDevelopment(sp)
             ? sp.GetRequiredService<NiteDevServer>()
@@ -70,7 +68,7 @@ public static class NiteExtensions
         }
 
         var server = app.ApplicationServices.GetRequiredService<NiteDevServer>();
-        server.Start();
+        server.Start(HostStarted(app.ApplicationServices));
         app.Map(NiteProject.BasePath, branch =>
         {
             branch.UseWebSockets();
@@ -107,6 +105,22 @@ public static class NiteExtensions
             context.Response.ContentType = "text/html; charset=utf-8";
             await context.Response.WriteAsync(html);
         });
+    }
+
+    /// <summary>
+    /// Completes when every hosted service and the server have started, which is when
+    /// OpenTelemetry starts listening. Null without a host (the dev server then starts at once).
+    /// </summary>
+    private static Task? HostStarted(IServiceProvider services)
+    {
+        if (services.GetService<IHostApplicationLifetime>() is not { } lifetime)
+        {
+            return null;
+        }
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Runs at once if the host has already started.
+        lifetime.ApplicationStarted.Register(() => started.TrySetResult());
+        return started.Task;
     }
 
     private static bool IsDevelopment(IServiceProvider services)

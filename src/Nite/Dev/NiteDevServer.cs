@@ -61,7 +61,6 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     private DependencyBundle _dependencies = new("", new Dictionary<string, string>());
     private string _lockFingerprint = "";
     private Task _ready = Task.CompletedTask;
-    private readonly Task? _hostStarted;
     private volatile bool _initialized;
     private volatile bool _refreshEnabled;
     private int _started;
@@ -73,13 +72,8 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     private volatile IReadOnlyList<string> _envDefines = [];
     private volatile TsconfigPaths _aliases = new();
 
-    /// <param name="hostStarted">
-    /// Completes when the host has started. Startup waits for it, because telemetry listeners
-    /// (OpenTelemetry's) subscribe as the host starts and would miss the startup trace otherwise.
-    /// </param>
-    public NiteDevServer(NiteProject project, HttpClient http, ILoggerFactory loggerFactory, Task? hostStarted = null)
+    public NiteDevServer(NiteProject project, HttpClient http, ILoggerFactory loggerFactory)
     {
-        _hostStarted = hostStarted;
         _project = project;
         _http = http;
         _loggerFactory = loggerFactory;
@@ -118,7 +112,11 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     }
 
     /// <summary>Starts installing, scanning and pre-bundling in the background. Safe to call more than once.</summary>
-    public void Start()
+    /// <param name="hostStarted">
+    /// Completes when the host has started. Startup waits for it, because telemetry listeners
+    /// (OpenTelemetry's) subscribe as the host starts and would miss the startup trace otherwise.
+    /// </param>
+    public void Start(Task? hostStarted = null)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
         {
@@ -127,10 +125,10 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
         _ready = RunExclusiveAsync(async () =>
         {
-            if (_hostStarted is not null)
+            if (hostStarted is not null)
             {
-                // Bounded, in case something starts the server without running the host.
-                await Task.WhenAny(_hostStarted, Task.Delay(TimeSpan.FromSeconds(10)));
+                // Bounded, in case the host never reports that it started.
+                await Task.WhenAny(hostStarted, Task.Delay(TimeSpan.FromSeconds(10)));
             }
             await NiteTelemetry.TraceAsync("nite.dev.startup", InitializeAsync, root: true);
         });
