@@ -7,10 +7,11 @@
     -->
     <Version>0.0.0-dev</Version>
     <!-- One product name on every signed file, as SignPath's terms require. -->
-    <Product>Nite</Product>
+    <Product>NiteFx</Product>
     <Authors>Tim McQueen</Authors>
     <Copyright>Copyright Tim McQueen</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://nitefx.dev</PackageProjectUrl>
     <RepositoryUrl>https://github.com/nite-net/nite</RepositoryUrl>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>

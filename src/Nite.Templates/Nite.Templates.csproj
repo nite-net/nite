@@ -7,7 +7,7 @@
   <PropertyGroup>
     <PackageId>Nite.Templates</PackageId>
     <PackageType>Template</PackageType>
-    <Description>dotnet new templates for Nite: a React single-page app (nite-spa) and Razor Pages with React islands (nite-islands), with no Node.js toolchain.</Description>
+    <Description>dotnet new templates for NiteFx: a React single-page app (nite-spa) and Razor Pages with React islands (nite-islands), with no Node.js toolchain.</Description>
     <PackageTags>dotnet-new;templates;nite;react;typescript;aspnetcore</PackageTags>
     <TargetFramework>net10.0</TargetFramework>
     <IncludeBuildOutput>false</IncludeBuildOutput>

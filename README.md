@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Nite" width="360">
+  <img src="docs/logo.png" alt="NiteFx" width="360">
 </p>
 
-# Nite
+# NiteFx
 
 TypeScript and React for ASP.NET Core with a Vite-style dev loop and no Node.js toolchain.
 
-*Nite* is pronounced like **night**, not *neat*. (Vite is French for "quick" and pronounced *veet*.)
+*NiteFx* is short for **Nite Framework**, and *Nite* is pronounced like **night**, not *neat*. (Vite is French for "quick" and pronounced *veet*.) The packages (`Nite`, `Nite.Cli`, `Nite.Templates`), the C# namespace and the `nite` command keep the short name.
 
 Build the frontend and the backend in one project, one process, one `dotnet watch`: edit a React
 component and it updates in place with its state intact; edit a C# endpoint and the page re-fetches
@@ -29,17 +29,17 @@ Two ways to use it:
 
 ## How it works
 
-Nite does the orchestration in .NET and hands compilation to **esbuild**, the same Go binary Vite
+NiteFx does the orchestration in .NET and hands compilation to **esbuild**, the same Go binary Vite
 uses for dependency pre-bundling.
 
-| Piece | What Nite does |
+| Piece | What NiteFx does |
 |---|---|
 | **esbuild** | Downloads the platform binary from npm (`@esbuild/linux-x64` etc.), verifies its integrity hash, caches it per user, and keeps one `esbuild --service` process alive for the life of the app, talking esbuild's binary stdio protocol (the same channel its JS API uses). |
 | **Packages** | A small npm client in C#: resolves semver ranges from the registry, hoists into a normal `node_modules`, writes `nite.lock.json`, verifies tarball integrity, never runs install scripts. Editors and `tsc` see packages where they expect them. |
 | **Dev server** (`/_nite`) | Each source file is transformed on request (cached until it changes). Relative imports are rewritten to canonical URLs so a module never loads twice. Bare imports (`react`) go through an **import map** to pre-bundled dependencies. |
 | **Pre-bundling** | Every bare import becomes one ESM file, built in a single code-split esbuild pass so `react-dom` and your code share one React. CommonJS packages (React itself, still) get a generated wrapper whose named exports come from a `cjs-module-lexer`-style scan. |
-| **React Fast Refresh** | esbuild has no Fast Refresh transform, so Nite reads esbuild's output, registers each component with `react-refresh` and signs it with its hook calls. A module graph tracks who imports what; a change walks up to the nearest module whose exports are all components, re-imports it, and React swaps the new code in. Changing hooks remounts the component instead of crashing. If the walk reaches the page's entry module, the page reloads. |
-| **Stylesheets** | Sass (Dart Sass's native binary, over its embedded protocol), Less, Tailwind CSS 4 and your PostCSS config run inside Nite, then esbuild bundles the result: CSS modules, `@import` from packages, `url()` assets. The JavaScript tools (PostCSS and its plugins, Tailwind's compiler, Less) come from your `node_modules` and run in [Jint](https://github.com/sebastienros/jint), a JavaScript interpreter written in C#. See [Stylesheets](#stylesheets). |
+| **React Fast Refresh** | esbuild has no Fast Refresh transform, so NiteFx reads esbuild's output, registers each component with `react-refresh` and signs it with its hook calls. A module graph tracks who imports what; a change walks up to the nearest module whose exports are all components, re-imports it, and React swaps the new code in. Changing hooks remounts the component instead of crashing. If the walk reaches the page's entry module, the page reloads. |
+| **Stylesheets** | Sass (Dart Sass's native binary, over its embedded protocol), Less, Tailwind CSS 4 and your PostCSS config run inside NiteFx, then esbuild bundles the result: CSS modules, `@import` from packages, `url()` assets. The JavaScript tools (PostCSS and its plugins, Tailwind's compiler, Less) come from your `node_modules` and run in [Jint](https://github.com/sebastienros/jint), a JavaScript interpreter written in C#. See [Stylesheets](#stylesheets). |
 | **Other live updates** | CSS (imported or `<link>`ed) swaps in place. Compile errors show an overlay without reloading and clear when the file is fixed. C# hot reloads raise a `nite:server-update` event in the browser. |
 | **HTML entries** | `Client/index.html` is a real entry, as in Vite: local module scripts and stylesheets are compiled in dev and replaced with hashed bundles in production. |
 | **Islands** | A 1.5 KB (minified) loader finds `data-island` elements, loads each island's module on `load`, `idle`, `visible` or a `media` query, and mounts it. A `MutationObserver` mounts islands added later (htmx, Turbo, Blazor enhanced navigation) and unmounts removed ones. |
@@ -73,7 +73,7 @@ dotnet new nite-spa -o my-app            # or: dotnet new nite-islands
 `dotnet new` the first `nite watch` does). Either way you need the `nite` tool for `nite watch`
 and for Release builds.
 
-To work on Nite itself, point new projects at a checkout instead of the NuGet package:
+To work on NiteFx itself, point new projects at a checkout instead of the NuGet package:
 `nite init my-app --nite-source path/to/nite` (run the CLI with
 `dotnet run --project src/Nite.Cli --`). The samples work the same way:
 
@@ -175,21 +175,21 @@ assets (`import logo from "./logo.svg"` gives a URL), as with Vite.
 ```
 
 Use `nite add` / `nite rm` rather than editing by hand (comments in the file are kept), or edit
-`dependencies` while the app is running and Nite installs, re-bundles and reloads the page.
+`dependencies` while the app is running and NiteFx installs, re-bundles and reloads the page.
 Commit `nite.lock.json`.
 
 ### Install scripts
 
-Nite never runs `preinstall`, `install` or `postinstall` scripts: they are arbitrary code, and
+NiteFx never runs `preinstall`, `install` or `postinstall` scripts: they are arbitrary code, and
 most of them build or download things for Node.js, which a browser has no use for. When a
-package that has one is resolved (the registry marks it with `hasInstallScript`), Nite says so
+package that has one is resolved (the registry marks it with `hasInstallScript`), NiteFx says so
 once, after resolving, with a clearer message for the usual suspects:
 
-| Package | What Nite says |
+| Package | What NiteFx says |
 |---|---|
 | `core-js`, `core-js-pure`, `es5-ext` | The script only prints a message; nothing is missing. |
-| `esbuild` | The script fetches the esbuild binary, which Nite downloads and runs itself. |
-| `node-sass` | Warning: it builds LibSass. Nite compiles Sass with Dart Sass's native binary; use `sass` instead. |
+| `esbuild` | The script fetches the esbuild binary, which NiteFx downloads and runs itself. |
+| `node-sass` | Warning: it builds LibSass. NiteFx compiles Sass with Dart Sass's native binary; use `sass` instead. |
 | `bcrypt`, `better-sqlite3`, `sqlite3`, `argon2`, `canvas` | Warning: a native Node.js addon, which cannot run in a browser. Do that work in ASP.NET Core. |
 | anything else | Warning: the package may not work if it needs its script to download or build something. |
 
@@ -249,24 +249,24 @@ production builds alike:
    handles `url()` assets, and in production minifies and lowers for the target browsers.
 
 Install the tools you use as dev dependencies, as you would for Vite: `nite add -D sass-embedded`
-(or `sass`), `less`, `tailwindcss`, `postcss` plus its plugins. Nite runs them, no Node needed:
+(or `sass`), `less`, `tailwindcss`, `postcss` plus its plugins. NiteFx runs them, no Node needed:
 
 - **Sass** runs as the native Dart Sass binary, from the `sass-embedded-<platform>` npm package
   that matches your `sass`/`sass-embedded` version (downloaded once into the cache, like esbuild).
   One compiler process serves every compile. `pkg:` URLs work, and the client root and
   `node_modules` are load paths.
-- **PostCSS, Tailwind and Less** are plain JavaScript. Nite bundles them from your `node_modules`
+- **PostCSS, Tailwind and Less** are plain JavaScript. NiteFx bundles them from your `node_modules`
   with esbuild and runs the bundle in Jint, with just enough of Node's built-ins (`fs`, `path`,
   `url`…) for them to work. The interpreter is slower than Node: expect a second or two the first
   time a dev server starts compiling a Tailwind stylesheet, then incremental updates in tens of
   milliseconds. Production builds pay it once.
-- **Tailwind** is Tailwind's own compiler (the `tailwindcss` package). Nite stands in for its
+- **Tailwind** is Tailwind's own compiler (the `tailwindcss` package). NiteFx stands in for its
   native file scanner: class names are found in the whole project folder, so classes used only in
   Razor views (`.cshtml`, `.razor`) count too. `.gitignore`d folders, `bin`, `obj` and
   `node_modules` are skipped, and `@source`, `@source not` and `@source inline()` work as
   documented. `@plugin` and `@config` load from `node_modules`. `@tailwindcss/vite` and
   `@tailwindcss/postcss` are not needed (they need native code); if your PostCSS config lists the
-  latter, Nite skips it and runs Tailwind itself. Tailwind 3 is not supported.
+  latter, NiteFx skips it and runs Tailwind itself. Tailwind 3 is not supported.
 - PostCSS runs on your stylesheets, not on CSS shipped in packages (it is already built, and slow
   to re-process). Set `"css": { "postCss": false }` to turn it off.
 
@@ -309,7 +309,7 @@ nite init my-app --from ../vite-app             # do it (the source is never mod
 ```
 
 Works with **Vite** (React) and **Create React App** projects managed by npm, Yarn (classic or
-Berry), pnpm or Bun. Nite reads the project and:
+Berry), pnpm or Bun. NiteFx reads the project and:
 
 - Copies `index.html` and `src/` into `Client/`, `public/` into `wwwroot/`, tsconfig and
   PostCSS/Tailwind config files into `Client/`, and `.env*` files into the project.
@@ -325,7 +325,7 @@ Berry), pnpm or Bun. Nite reads the project and:
   the path-building template literal in Mantine's guide); anything it cannot evaluate is reported.
 - Sets `envPrefix` (`VITE_` or `REACT_APP_`, or `envPrefix` from vite.config), turns on `jsxInJs`
   for Create React App, rewrites `public/index.html`'s `%PUBLIC_URL%` and adds its entry script,
-  and swaps the `vite/client` / `react-scripts` types for Nite's (`nite-env.d.ts`).
+  and swaps the `vite/client` / `react-scripts` types for NiteFx's (`nite-env.d.ts`).
 - Reports what it could not bring along: Vite plugins other than React's and Tailwind's, Stylus,
   Tailwind 3, `import.meta.glob`, `?raw`/`?url`/`?worker` imports, SVGs as React components (svgr),
   `overrides`/`resolutions`, and package.json scripts. The dev `proxy` is not needed: the app and
@@ -336,7 +336,7 @@ Next.js, Remix and Astro apps have their own servers and are out of scope.
 
 ## Full-stack dev with `nite watch`
 
-`nite watch` runs `dotnet watch`: it handles the C# side and Nite handles the client side.
+`nite watch` runs `dotnet watch`: it handles the C# side and NiteFx handles the client side.
 
 | You edit | What happens |
 |---|---|
@@ -352,7 +352,7 @@ Next.js, Remix and Astro apps have their own servers and are out of scope.
 Plain `dotnet watch` injects its own browser script, which reloads the page after **every** C#
 change. That suits Razor pages, but in a single-page app it throws away client state for an
 API-only change. `nite watch` turns it off (`DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1`, which only
-works from the environment, not `launchSettings.json`) and Nite takes over, reloading after
+works from the environment, not `launchSettings.json`) and NiteFx takes over, reloading after
 restarts by itself. For Razor pages, keep dotnet's refresh with `nite watch --browser-refresh`.
 
 It also sets `DOTNET_WATCH_RESTART_ON_RUDE_EDIT=1`. Without it, an interactive dotnet watch handles
@@ -382,7 +382,7 @@ The event never fires in production, so this costs nothing there.
 
 ## Telemetry and health checks
 
-Nite reports what it does as OpenTelemetry traces and metrics, through .NET's own
+NiteFx reports what it does as OpenTelemetry traces and metrics, through .NET's own
 `ActivitySource` and `Meter` (both named `Nite`), so the library takes no OpenTelemetry dependency
 and costs nothing until something listens. Add the names to your OpenTelemetry setup, for
 example in the web project of an [Aspire](https://aspire.dev) app, next to `AddServiceDefaults()`:
@@ -409,11 +409,11 @@ Metrics: `nite.dev.compile.duration` and `nite.dev.compiles` (by `nite.kind` and
 `nite.packages.install.duration`, `nite.packages.tarballs` (cache hits and misses) and
 `nite.build.duration`. Failed spans carry the error status and an `exception` event.
 
-Requests Nite serves under `/_nite` are named after their route (`GET /_nite/src/{**path}`), as
+Requests NiteFx serves under `/_nite` are named after their route (`GET /_nite/src/{**path}`), as
 routing names endpoints. [`samples/Nite.Aspire`](samples/Nite.Aspire) shows all of this in the Aspire
 dashboard.
 
-A health check reports whether Nite can serve the app:
+A health check reports whether NiteFx can serve the app:
 
 ```csharp
 builder.Services.AddHealthChecks().AddNite();
@@ -434,12 +434,12 @@ readiness check (untagged), so Aspire's `/health` includes it and `/alive` does 
 | `nite list` | `ls` | Direct packages with their ranges and installed versions; `--all` adds transitive ones. |
 | `nite update [pkg...]` | `up` | Show current, wanted and latest versions, then update within the ranges. `--check` only reports; `--latest` moves the ranges to the latest versions. |
 | `nite build` | | Production build into `wwwroot/_nite` (publish runs this). |
-| `nite watch` | | `dotnet watch` with Nite handling the browser and restarts automatic; `--browser-refresh`, `--no-auto-restart`. See above. |
+| `nite watch` | | `dotnet watch` with NiteFx handling the browser and restarts automatic; `--browser-refresh`, `--no-auto-restart`. See above. |
 | `nite config list` | `config ls` | Effective settings; `--show-origin` shows which file or variable each comes from. |
 | `nite config get\|set\|unset <key>` | | Read or change the user config (`registry`, `@scope:registry`, `init.template`). `config path` prints its location. |
 | `nite cache dir\|clean\|verify` | | Where the cache is; delete it; check cached tarballs and drop corrupt ones. |
-| `nite version` | `--version` | The Nite version (and esbuild and .NET versions). |
-| `nite update-self` | | `dotnet tool update Nite.Cli`, for however Nite is installed: local tool manifest, global, or `--tool-path`. |
+| `nite version` | `--version` | The NiteFx version (and esbuild and .NET versions). |
+| `nite update-self` | | `dotnet tool update Nite.Cli`, for however NiteFx is installed: local tool manifest, global, or `--tool-path`. |
 
 Project commands work on the current directory; `-C <dir>` points them elsewhere, and
 `--verbose` shows debug output. Installs keep the versions already in `nite.lock.json` unless a
@@ -448,7 +448,7 @@ range forces a change, so adding one package never upgrades the others; that's w
 
 ## Configuration
 
-Nite keeps per-user files where the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/latest/)
+NiteFx keeps per-user files where the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/latest/)
 says they go:
 
 | | Linux and macOS | Windows | Override |
@@ -457,7 +457,7 @@ says they go:
 | Cache (tarballs, registry metadata, esbuild, Sass) | `~/.cache/nite` | `%LOCALAPPDATA%\nite\cache` | `NITE_CACHE_DIR`, `XDG_CACHE_HOME` |
 
 `XDG_*` variables apply on every OS when set. The cache is always safe to delete
-(`nite cache clean`), which also removes the cache older Nite versions left in `~/.local/share/nite`.
+(`nite cache clean`), which also removes the cache older NiteFx versions left in `~/.local/share/nite`.
 
 Settings come from these places, highest first:
 
@@ -478,7 +478,7 @@ environment:
 ```
 
 A credential is only sent to URLs under its host and path, never to other hosts (a tarball on a
-CDN, say). `_authToken`, `_auth`, and `username` with `_password` are supported. Nite refuses to
+CDN, say). `_authToken`, `_auth`, and `username` with `_password` are supported. NiteFx refuses to
 store credentials in its own config; they stay in `.npmrc`.
 
 Registry metadata is cached with its ETag and revalidated, so resolving an unchanged package
@@ -486,7 +486,7 @@ costs a 304 instead of a download.
 
 ## Limits and non-goals
 
-Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
+NiteFx is intentionally smaller than Vite. Things it does not do (yet, or ever):
 
 - **No Vite/Rollup plugins.** Vue SFCs, Svelte, MDX and friends need Vite's plugin pipeline. If
   you need them, use Vite; it's the right tool. (PostCSS plugins do work; see Stylesheets.)
@@ -503,7 +503,7 @@ Nite is intentionally smaller than Vite. Things it does not do (yet, or ever):
   server-side picture.
 - **Registry packages only**: no git, `file:` or `npm:` alias dependencies. Optional dependencies
   are skipped and install scripts never run, so packages that need a postinstall step won't work
-  (Nite warns about them; see [Install scripts](#install-scripts)).
+  (NiteFx warns about them; see [Install scripts](#install-scripts)).
 - **Not yet:** Stylus, `import.meta.glob`, Vite's `?raw`/`?url`/`?worker` imports, CSS modules'
   `localsConvention`, and CSS that a package's own JavaScript imports (import its stylesheet from
   your code instead, as Mantine does). The importer warns about each of these when a project uses
@@ -552,8 +552,8 @@ Only binaries built from this repository by its release workflow are signed.
 - Committers and reviewers: [Tim McQueen](https://github.com/tmcqueen)
 - Approvers: [Tim McQueen](https://github.com/tmcqueen)
 
-Read the full [Code signing policy](https://nite-net.github.io/docs/code-signing.html) and the
-[Privacy policy](https://nite-net.github.io/docs/privacy.html). Nite collects no information,
+Read the full [Code signing policy](https://nitefx.dev/docs/code-signing.html) and the
+[Privacy policy](https://nitefx.dev/docs/privacy.html). NiteFx collects no information,
 and it transfers data to other networked systems only when you ask it to, such as installing
 packages from the npm registry.
 

@@ -1,4 +1,4 @@
-# Nite
+# NiteFx
 
 TypeScript and React for ASP.NET Core without a Node.js toolchain. `src/Nite` is the library,
 `src/Nite.Cli` the `nite` tool, `src/Nite.Templates` the `dotnet new` templates, `tests/Nite.Tests`
@@ -28,8 +28,10 @@ maintainer pushes tags. Record changes in the docs repo's `docs/changelog.md`.
 
 ## Writing
 
-- **Nite** is a proper noun: capitalize it in prose, including docs and comments. Lowercase is
-  for code and commands only (`nite watch`, `nite.json`, `/_nite`, `nite:config`).
+- The project is **NiteFx** (short for Nite Framework); use that name in prose and docs. The NuGet
+  packages (`Nite`, `Nite.Cli`, `Nite.Templates`), the `Nite` namespace, the `nite` command and its
+  files (`nite.json`, `/_nite`, `nite:config`) keep the short name; write those as code. The docs
+  site is <https://nitefx.dev>; the repositories stay under `nite-net` on GitHub.
 - The `(n)ite` in the logo is a visual joke; do not write the name that way.
 
 ## Stopping processes you started
