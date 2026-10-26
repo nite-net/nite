@@ -10,7 +10,8 @@ public partial class TemplateTests
 {
     private static readonly string Content = Path.Combine(RepositoryRoot(), "src", "Nite.Templates", "content");
 
-    [GeneratedRegex(@"NITE_[A-Z_]+")]
+    // NITE_PUBLIC_ is the client env prefix that template docs mention, not a placeholder.
+    [GeneratedRegex(@"NITE_(?!PUBLIC_)[A-Z_]+")]
     private static partial Regex Placeholder();
 
     [Theory]
