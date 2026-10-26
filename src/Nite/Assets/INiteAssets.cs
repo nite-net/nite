@@ -31,13 +31,15 @@ public sealed record NiteHead(
     IReadOnlyList<string> Preloads,
     IReadOnlyList<string> Scripts)
 {
-    public string ToHtml()
+    /// <param name="nonce">The request's CSP nonce, put on every script element.</param>
+    public string ToHtml(string? nonce = null)
     {
         var html = new StringBuilder();
+        var nonceAttribute = string.IsNullOrEmpty(nonce) ? "" : $" nonce=\"{HtmlEncoder.Default.Encode(nonce)}\"";
         if (ImportMap is { Count: > 0 } imports)
         {
             // System.Text.Json escapes '<' and friends, so this cannot close the script element early.
-            html.Append("<script type=\"importmap\">").Append(JsonSerializer.Serialize(new { imports })).Append("</script>\n");
+            html.Append($"<script type=\"importmap\"{nonceAttribute}>").Append(JsonSerializer.Serialize(new { imports })).Append("</script>\n");
         }
         foreach (var preload in Preloads)
         {
@@ -45,7 +47,7 @@ public sealed record NiteHead(
         }
         foreach (var script in Scripts)
         {
-            html.Append("<script type=\"module\" src=\"").Append(HtmlEncoder.Default.Encode(script)).Append("\"></script>\n");
+            html.Append($"<script type=\"module\"{nonceAttribute} src=\"").Append(HtmlEncoder.Default.Encode(script)).Append("\"></script>\n");
         }
         return html.ToString();
     }

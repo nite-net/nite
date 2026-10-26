@@ -27,7 +27,7 @@ public sealed class NiteHeadTagHelper(INiteAssets assets) : TagHelper
             output.Content.AppendHtml(config);
         }
         var head = await assets.GetHeadAsync(ViewContext.HttpContext);
-        output.Content.AppendHtml(head.ToHtml());
+        output.Content.AppendHtml(head.ToHtml(NiteExtensions.CspNonce(ViewContext.HttpContext)));
     }
 }
 

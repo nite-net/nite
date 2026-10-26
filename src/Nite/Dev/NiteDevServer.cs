@@ -424,6 +424,9 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             if (!style) {
               style = document.createElement("style");
               style.dataset.niteCss = id;
+              // A Content-Security-Policy that allows styles by nonce: Nite put the page's on its scripts.
+              const nonce = document.querySelector("script[nonce]")?.nonce;
+              if (nonce) style.nonce = nonce;
               document.head.appendChild(style);
             }
             style.textContent = css;
@@ -1448,6 +1451,8 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
         var relativePage = _project.RelativeToClientRoot(file);
         var basePath = context.Request.PathBase + NiteProject.BasePath;
+        var nonce = NiteExtensions.CspNonce(context);
+        var nonceAttribute = string.IsNullOrEmpty(nonce) ? "" : $" nonce=\"{System.Net.WebUtility.HtmlEncode(nonce)}\"";
         var html = HtmlDocument.Rewrite(await File.ReadAllTextAsync(file), reference =>
         {
             var local = HtmlDocument.ResolveLocal(relativePage, reference.Url);
@@ -1461,7 +1466,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             {
                 var module = ResolveModuleFile(target);
                 return module is null ? null
-                    : $"<script type=\"module\" src=\"{basePath}/src/{_project.RelativeToClientRoot(module)}\"></script>";
+                    : $"<script type=\"module\"{nonceAttribute} src=\"{basePath}/src/{_project.RelativeToClientRoot(module)}\"></script>";
             }
             return File.Exists(target)
                 ? $"<link rel=\"stylesheet\" href=\"{basePath}/src/{_project.RelativeToClientRoot(target)}\">"
@@ -1469,7 +1474,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         });
 
         var head = await GetHeadAsync(context, includeIslands: false);
-        return HtmlDocument.InjectHead(html, head.ToHtml());
+        return HtmlDocument.InjectHead(html, head.ToHtml(nonce));
     }
 
     public ValueTask<NiteAsset> GetIslandAsync(string name, HttpContext context)

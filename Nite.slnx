@@ -4,6 +4,7 @@
     <Project Path="samples/Nite.Aspire/AppHost/Nite.Aspire.AppHost.csproj" />
     <Project Path="samples/Nite.Aspire/ServiceDefaults/Nite.Aspire.ServiceDefaults.csproj" />
     <Project Path="samples/Nite.Aspire/Web/Nite.Aspire.Web.csproj" />
+    <Project Path="samples/Nite.Identity/Nite.Identity.csproj" />
     <Project Path="samples/Nite.Sample/Nite.Sample.csproj" />
     <Project Path="samples/Nite.Spa/Nite.Spa.csproj" />
   </Folder>
