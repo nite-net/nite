@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="docs/logo.png" alt="(n)ite" width="360">
+  <img src="docs/logo.png" alt="Nite" width="360">
 </p>
 
-# nite
+# Nite
 
 TypeScript and React for ASP.NET Core with a Vite-style dev loop and no Node.js toolchain.
+
+*Nite* is pronounced like **night**, not *neat*. (Vite is French for "quick" and pronounced *veet*.)
 
 Build the frontend and the backend in one project, one process, one `dotnet watch`: edit a React
 component and it updates in place with its state intact; edit a C# endpoint and the page re-fetches
@@ -437,7 +439,7 @@ readiness check (untagged), so Aspire's `/health` includes it and `/alive` does 
 | `nite config get\|set\|unset <key>` | | Read or change the user config (`registry`, `@scope:registry`, `init.template`). `config path` prints its location. |
 | `nite cache dir\|clean\|verify` | | Where the cache is; delete it; check cached tarballs and drop corrupt ones. |
 | `nite version` | `--version` | The Nite version (and esbuild and .NET versions). |
-| `nite update-self` | | `dotnet tool update Nite.Cli`, for however nite is installed: local tool manifest, global, or `--tool-path`. |
+| `nite update-self` | | `dotnet tool update Nite.Cli`, for however Nite is installed: local tool manifest, global, or `--tool-path`. |
 
 Project commands work on the current directory; `-C <dir>` points them elsewhere, and
 `--verbose` shows debug output. Installs keep the versions already in `nite.lock.json` unless a
