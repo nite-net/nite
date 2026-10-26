@@ -6,6 +6,8 @@
       other builds, the next patch after the newest tag (0.6.1-ci.42). There is nothing to bump.
     -->
     <Version>0.0.0-dev</Version>
+    <!-- One product name on every signed file, as SignPath's terms require. -->
+    <Product>Nite</Product>
     <Authors>Tim McQueen</Authors>
     <Copyright>Copyright Tim McQueen</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

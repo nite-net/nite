@@ -542,6 +542,21 @@ variables; `NITE_ESBUILD_PATH` points to an esbuild binary you supply (it must b
 and `NITE_SASS_PATH` to a `dart-sass` folder (from Dart Sass's standalone release) to use instead
 of downloading one.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Only binaries built from this repository by its release workflow are signed.
+
+- Committers and reviewers: [Tim McQueen](https://github.com/tmcqueen)
+- Approvers: [Tim McQueen](https://github.com/tmcqueen)
+
+Read the full [Code signing policy](https://nite-net.github.io/docs/code-signing.html) and the
+[Privacy policy](https://nite-net.github.io/docs/privacy.html). Nite collects no information,
+and it transfers data to other networked systems only when you ask it to, such as installing
+packages from the npm registry.
+
 ## License
 
 [Apache License 2.0](LICENSE).
