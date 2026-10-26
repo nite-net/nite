@@ -9,8 +9,8 @@
   ],
   "identity": "Nite.Templates.Spa",
   "groupIdentity": "Nite.Spa",
-  "name": "Nite React SPA",
-  "description": "A React single-page app compiled by Nite, served next to a minimal API from one ASP.NET Core project. No Node.js toolchain.",
+  "name": "NiteFx React SPA",
+  "description": "A React single-page app compiled by NiteFx, served next to a minimal API from one ASP.NET Core project. No Node.js toolchain.",
   "shortName": "nite-spa",
   "tags": {
     "language": "C#",

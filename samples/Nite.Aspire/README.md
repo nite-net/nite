@@ -1,9 +1,9 @@
-# Nite under Aspire
+# NiteFx under Aspire
 
 An [Aspire](https://aspire.dev) app with two services:
 
-- **web**: a React single-page app compiled by Nite, plus `/api/quote`, which calls the API. The
-  Nite dev server runs inside this project, so there is no separate frontend process, port or proxy.
+- **web**: a React single-page app compiled by NiteFx, plus `/api/quote`, which calls the API. The
+  NiteFx dev server runs inside this project, so there is no separate frontend process, port or proxy.
 - **api**: a minimal API that hands out quotes. `web` finds it through service discovery
   (`https+http://api`).
 
@@ -41,5 +41,5 @@ served the page: a click on "Another one" shows in Application Insights as one t
 page view through `web` to `api`.
 
 The Nite-specific wiring is a few lines in `Web/Program.cs`; `ServiceDefaults` is the stock Aspire
-template, because the API does not use Nite. See
-[Telemetry, health checks and Aspire](https://nite-net.github.io/docs/guides/observability.html).
+template, because the API does not use NiteFx. See
+[Telemetry, health checks and Aspire](https://nitefx.dev/docs/guides/observability.html).

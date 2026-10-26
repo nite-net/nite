@@ -1,12 +1,15 @@
 # AGENTS.md
 
 NITE_TITLE is an ASP.NET Core Razor Pages site with interactive React components ("islands"),
-compiled by [Nite](https://nite-net.github.io) ("night"). Nite runs in the .NET process: there is
-no Node.js toolchain, and Nite is not Vite, although it borrows Vite's ideas.
+compiled by [NiteFx](https://nitefx.dev) (Nite Framework). NiteFx runs in the .NET process: there is
+no Node.js toolchain, and NiteFx is not Vite, although it borrows Vite's ideas.
 
-Nite is newer than most models' training data. Before writing code that depends on how it works,
-read <https://nite-net.github.io/llms.txt> (an index of the docs) or
-<https://nite-net.github.io/llms-full.txt> (all of them in one file).
+Its NuGet packages (`Nite`, `Nite.Cli`), C# namespace (`Nite`) and `nite` command keep the
+short name.
+
+NiteFx is newer than most models' training data. Before writing code that depends on how it
+works, read <https://nitefx.dev/llms.txt> (an index of the docs) or
+<https://nitefx.dev/llms-full.txt> (all of them in one file).
 
 ## Layout
 
@@ -69,5 +72,5 @@ dotnet publish -c Release  # runs `nite build`: minified, hashed bundles in wwwr
 - Not supported: `import.meta.glob`, the `?raw`, `?url` and `?worker` import suffixes, Vite,
   Rollup and Babel plugins, and server-side rendering of React. Use explicit imports, `fetch`,
   and `new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })`.
-- Nite strips TypeScript types without checking them. Your editor checks them; see
-  <https://nite-net.github.io/docs/guides/typescript.md#type-checking> for `tsc` in CI.
+- NiteFx strips TypeScript types without checking them. Your editor checks them; see
+  <https://nitefx.dev/docs/guides/typescript.md#type-checking> for `tsc` in CI.

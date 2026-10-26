@@ -9,8 +9,8 @@
   ],
   "identity": "Nite.Templates.Islands",
   "groupIdentity": "Nite.Islands",
-  "name": "Nite Razor Pages with React islands",
-  "description": "Server-rendered Razor Pages with interactive React islands compiled by Nite. No Node.js toolchain.",
+  "name": "NiteFx Razor Pages with React islands",
+  "description": "Server-rendered Razor Pages with interactive React islands compiled by NiteFx. No Node.js toolchain.",
   "shortName": "nite-islands",
   "tags": {
     "language": "C#",
