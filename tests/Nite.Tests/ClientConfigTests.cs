@@ -24,6 +24,18 @@ public class ClientConfigTests
     }
 
     [Fact]
+    public void Puts_the_csp_nonce_on_every_script()
+    {
+        var head = new NiteHead(new Dictionary<string, string> { ["react"] = "/_nite/deps/react.js" }, ["/_nite/chunk.js"], ["/_nite/client.js"]);
+
+        var html = head.ToHtml("abc123");
+
+        Assert.Contains("<script type=\"importmap\" nonce=\"abc123\">", html);
+        Assert.Contains("<script type=\"module\" nonce=\"abc123\" src=\"/_nite/client.js\">", html);
+        Assert.DoesNotContain("nonce", head.ToHtml());
+    }
+
+    [Fact]
     public async Task Writes_nothing_without_client_config()
     {
         Assert.Null(await NiteClientConfig.RenderAsync(Context(_ => { })));
@@ -120,9 +132,10 @@ public class ClientConfigIntegrationTests : IDisposable
         using var response = await http.GetAsync("/todos/3");
         var html = await response.Content.ReadAsStringAsync();
 
-        // Pages carrying client config may be per user: no shared cache may keep them.
-        Assert.True(response.Headers.CacheControl!.NoCache);
-        Assert.Equal(withConfig, response.Headers.CacheControl.Private);
+        // Pages carrying client config may be per user: no cache may keep them, the browser's included.
+        var cache = response.Headers.CacheControl!;
+        Assert.Equal(withConfig, cache.Private && cache.NoStore);
+        Assert.Equal(!withConfig, cache.NoCache);
         if (withConfig)
         {
             Assert.Contains("<script type=\"application/json\" id=\"nite-config\">{\"route\":\"/todos/3\"}</script>", html);

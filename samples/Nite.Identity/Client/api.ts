@@ -1,20 +1,25 @@
 import { config } from "nite:config";
 
+/** Sends the page's form token, which the server requires on anything that changes data. */
+export function csrfHeaders(): HeadersInit {
+  return { "X-CSRF-Token": config.csrfToken };
+}
+
 /**
- * Calls /api with the bearer token this page came with. When the token has expired, reloading the
- * page brings a fresh one (or, if the sign-in cookie has expired too, the login page).
+ * Calls /api on this origin. The browser sends the HttpOnly session cookie by itself; the page
+ * never holds a credential. When the session has ended, it goes to the login page and back.
  */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${config.token}`,
+      ...csrfHeaders(),
       ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...init.headers,
     },
   });
   if (response.status === 401) {
-    location.reload();
+    location.assign(`/login?ReturnUrl=${encodeURIComponent(location.pathname + location.search)}`);
     return new Promise<T>(() => {});
   }
   if (!response.ok) {
@@ -25,6 +30,6 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function signOut() {
-  await fetch("/account/logout", { method: "POST" });
+  await fetch("/account/logout", { method: "POST", headers: csrfHeaders() });
   location.assign("/login");
 }

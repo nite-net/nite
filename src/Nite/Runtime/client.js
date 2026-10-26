@@ -10,8 +10,10 @@ export function showErrorOverlay({ message, file, line, column, lineText }) {
   overlay = document.createElement("nite-error-overlay");
   const shadow = overlay.attachShadow({ mode: "open" });
   const location = file ? `${file}${line ? `:${line}:${column}` : ""}` : "";
+  // A Content-Security-Policy that allows styles by nonce: Nite put the page's on its scripts.
+  const nonce = document.querySelector("script[nonce]")?.nonce ?? "";
   shadow.innerHTML = `
-    <style>
+    <style nonce="${nonce.replace(/[^A-Za-z0-9+/=_-]/g, "")}">
       :host { position: fixed; inset: 0; z-index: 2147483647; background: rgb(0 0 0 / 0.66);
               display: flex; align-items: flex-start; justify-content: center; padding: 10vh 16px; }
       .card { max-width: 860px; width: 100%; background: #181818; color: #eee; border-top: 6px solid #ff5555;

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { config } from "nite:config";
+import { csrfHeaders } from "../api";
 
 /** Where to go after signing in: the page that sent us here, if it is one of ours. */
 function returnUrl() {
@@ -10,7 +11,6 @@ function returnUrl() {
 export function Login() {
   const [userName, setUserName] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -20,16 +20,20 @@ export function Login() {
     setError(null);
     const response = await fetch("/account/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userName, password, remember }),
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ userName, password }),
     });
     if (response.ok) {
-      // The cookie is set; the app's page now loads, with this user's claims and token.
+      // The session cookie is set; the app's page now loads, with this user's claims.
       location.assign(returnUrl());
       return;
     }
     const problem = await response.json().catch(() => null);
-    setError(problem?.detail ?? `Sign-in failed (${response.status}).`);
+    setError(
+      response.status === 429
+        ? "Too many attempts from this address. Wait a minute and try again."
+        : (problem?.detail ?? `Sign-in failed (${response.status}).`),
+    );
     setBusy(false);
   }
 
@@ -49,9 +53,6 @@ export function Login() {
         <label>
           Password
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        </label>
-        <label className="inline">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Keep me signed in
         </label>
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={busy}>

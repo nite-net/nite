@@ -43,6 +43,15 @@ public sealed class NiteOptions
 
     /// <summary>Like <see cref="ClientConfig"/>, for values that take awaiting. Set one or the other.</summary>
     public Func<HttpContext, Task<object?>>? ClientConfigAsync { get; set; }
+
+    /// <summary>
+    /// The request's Content-Security-Policy nonce, for a policy that allows scripts and styles by
+    /// nonce. Nite puts it on what it writes into pages (the development import map and scripts,
+    /// <c>&lt;nite-head /&gt;</c>'s scripts), and the development runtime puts it on the
+    /// <c>&lt;style&gt;</c> elements it creates. Production builds need no inline code, so a policy
+    /// of <c>'self'</c> plus the nonce covers both.
+    /// </summary>
+    public Func<HttpContext, string?>? CspNonce { get; set; }
 }
 
 public static class NiteExtensions
@@ -128,8 +137,9 @@ public static class NiteExtensions
                 html = Html.HtmlDocument.InjectHead(html, config);
             }
             // Never cache the page itself: it is what points at the current hashed bundles. With
-            // client config it may also be someone's own, so no shared cache may keep it either.
-            context.Response.Headers.CacheControl = config is null ? "no-cache" : "private, no-cache";
+            // client config it may be someone's own (their claims, a form token), so no cache at
+            // all may keep it, the browser's own included.
+            context.Response.Headers.CacheControl = config is null ? "no-cache" : "private, no-store";
             context.Response.ContentType = "text/html; charset=utf-8";
             await context.Response.WriteAsync(html);
         };
@@ -138,6 +148,10 @@ public static class NiteExtensions
             ? endpoints.MapFallback(serve)
             : endpoints.MapFallback($"{path.TrimEnd('/')}/{{**clientPath:nonfile}}", serve);
     }
+
+    /// <summary>The request's CSP nonce, from <see cref="NiteOptions.CspNonce"/>.</summary>
+    internal static string? CspNonce(HttpContext context) =>
+        context.RequestServices.GetService<IOptions<NiteOptions>>()?.Value.CspNonce?.Invoke(context);
 
     /// <summary>
     /// Completes when every hosted service and the server have started, which is when

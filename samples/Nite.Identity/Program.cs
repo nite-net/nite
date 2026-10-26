@@ -1,107 +1,167 @@
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.BearerToken;
+using System.Security.Cryptography;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using Nite;
 using Nite.Identity.Data;
+using Nite.Identity.Security;
+
+// Sign-in for two single-page apps, kept on the server ("backend for frontend"): the browser holds
+// only an HttpOnly session cookie, which no script can read, and the app calls its API on the same
+// origin with that cookie plus a form token. No credential ever reaches JavaScript.
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("App") ?? "Data Source=app.db"));
 
-builder.Services.AddIdentity<IdentityUser, IdentityRole>()
+builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
+    {
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.User.RequireUniqueEmail = true;
+    })
     .AddEntityFrameworkStores<AppDbContext>();
 
-// Pages are protected by Identity's cookie: a browser navigating to a page cannot attach a token.
-// Signed-out visitors go to the login SPA, and API calls get a status code instead of a redirect.
 builder.Services.ConfigureApplicationCookie(options =>
 {
+    // __Host-: only over HTTPS, only for this host, for the whole site; no script can read it, and
+    // it is not sent with requests that other sites start.
+    options.Cookie.Name = "__Host-session";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    // Signed out after 30 idle minutes.
+    options.ExpireTimeSpan = TimeSpan.FromMinutes(30);
+    options.SlidingExpiration = true;
     options.LoginPath = "/login";
+    // API calls get a status code, not a redirect to a page of HTML.
     options.Events.OnRedirectToLogin = context => StatusOrRedirect(context, StatusCodes.Status401Unauthorized);
     options.Events.OnRedirectToAccessDenied = context => StatusOrRedirect(context, StatusCodes.Status403Forbidden);
 });
 
-// The API takes bearer tokens, which the main SPA receives with its page (ClientConfig below).
-builder.Services.AddAuthentication()
-    .AddBearerToken(IdentityConstants.BearerScheme, options => options.BearerTokenExpiration = TimeSpan.FromHours(1));
+// Sessions live on the server, so signing out ends them, copies of the cookie included.
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddServerSideSessions();
+
+// A changed password or role reaches signed-in sessions within a minute.
+builder.Services.Configure<SecurityStampValidatorOptions>(options => options.ValidationInterval = TimeSpan.FromMinutes(1));
+
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = Csrf.HeaderName;
+    options.Cookie.Name = "__Host-csrf";
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    // SecurityHeaders sends X-Frame-Options: DENY on every response.
+    options.SuppressXFrameOptionsHeader = true;
+});
 
 builder.Services.AddAuthorization(options =>
 {
-    // Everything needs a signed-in user unless it says otherwise: only /login and the sign-in call do.
+    // Everything needs a signed-in user unless it says otherwise: only /login and signing in do.
     options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
-    options.AddPolicy("Api", policy => policy.AddAuthenticationSchemes(IdentityConstants.BearerScheme).RequireAuthenticatedUser());
+    options.AddPolicy("Admin", policy => policy.RequireRole(Seed.AdminRole));
 });
 
-builder.Services.AddNite(options => options.ClientConfig = context =>
+// Ten sign-in attempts a minute per address, on top of Identity's lockout per account.
+builder.Services.AddRateLimiter(options =>
 {
-    // The login page is served to everyone; only signed-in users get claims and a token.
-    if (context.User.Identity?.IsAuthenticated != true)
-    {
-        return null;
-    }
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("sign-in", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+});
 
-    // A bearer token for this user, made the way the bearer token handler reads it back.
-    var bearer = context.RequestServices.GetRequiredService<IOptionsMonitor<BearerTokenOptions>>().Get(IdentityConstants.BearerScheme);
-    var expires = DateTimeOffset.UtcNow + bearer.BearerTokenExpiration;
-    var ticket = new AuthenticationTicket(context.User, new AuthenticationProperties { ExpiresUtc = expires }, IdentityConstants.BearerScheme);
+builder.Services.AddProblemDetails();
+builder.Services.AddHsts(options => options.MaxAge = TimeSpan.FromDays(365));
 
-    return new
+builder.Services.AddNite(options =>
+{
+    // Nite puts the request's nonce on what it writes inline, so the strict policy allows it.
+    options.CspNonce = SecurityHeaders.Nonce;
+
+    // What each page needs to start, written into it as it is served: a form token for the
+    // requests that change data and, once signed in, who the user is. Not a credential: the
+    // session stays in the HttpOnly cookie.
+    options.ClientConfig = context =>
     {
-        User = new
+        var csrfToken = context.RequestServices.GetRequiredService<IAntiforgery>().GetAndStoreTokens(context).RequestToken;
+        if (context.User.Identity?.IsAuthenticated != true)
         {
-            Name = context.User.Identity.Name,
-            Roles = context.User.FindAll(ClaimTypes.Role).Select(c => c.Value),
-            // The security stamp is Identity's own bookkeeping; the browser has no use for it.
-            Claims = context.User.Claims
-                .Where(c => c.Type != new ClaimsIdentityOptions().SecurityStampClaimType)
-                .Select(c => new { c.Type, c.Value }),
-        },
-        Token = bearer.BearerTokenProtector.Protect(ticket),
-        TokenExpires = expires,
+            return new { CsrfToken = csrfToken };
+        }
+        return new
+        {
+            CsrfToken = csrfToken,
+            User = new
+            {
+                Name = context.User.Identity.Name,
+                Roles = context.User.FindAll(ClaimTypes.Role).Select(c => c.Value),
+                // The security stamp is Identity's own bookkeeping; the browser has no use for it.
+                Claims = context.User.Claims
+                    .Where(c => c.Type != new ClaimsIdentityOptions().SecurityStampClaimType)
+                    .Select(c => new { c.Type, c.Value }),
+            },
+        };
     };
 });
 
 var app = builder.Build();
 
-// Creates app.db and the seeded users on first run.
+// Creates app.db and the demo users on first run.
 using (var scope = app.Services.CreateScope())
 {
-    scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.Migrate();
+    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
 }
+await app.RefuseDemoPasswordsOutsideDevelopmentAsync();
+
+if (!app.Environment.IsDevelopment())
+{
+    // Errors as problem details, without stack traces; and HTTPS only, remembered by browsers.
+    app.UseExceptionHandler();
+    app.UseHsts();
+}
+app.UseHttpsRedirection();
+app.UseSecurityHeaders();
 
 // Development: compiles Client/ on request with hot updates. Production: no-op.
 app.UseNite();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
-// Sign-in and sign-out set and clear the cookie.
-app.MapPost("/account/login", async (LoginRequest request, SignInManager<IdentityUser> signIn) =>
-{
-    var result = await signIn.PasswordSignInAsync(request.UserName, request.Password, request.Remember, lockoutOnFailure: true);
-    return result.Succeeded ? Results.NoContent()
-        : result.IsLockedOut ? Results.Problem("Too many failed attempts. Try again in a few minutes.", statusCode: StatusCodes.Status429TooManyRequests)
-        : Results.Problem("Wrong user name or password.", statusCode: StatusCodes.Status401Unauthorized);
-}).AllowAnonymous();
+var account = app.MapGroup("/account").AddEndpointFilter(Csrf.Validate);
 
-app.MapPost("/account/logout", async (SignInManager<IdentityUser> signIn) =>
+account.MapPost("/login", async (LoginRequest request, UserManager<IdentityUser> users, SignInManager<IdentityUser> signIn, IPasswordHasher<IdentityUser> hasher) =>
 {
+    var user = await users.FindByNameAsync(request.UserName);
+    if (user is null)
+    {
+        // Spend as long as checking a real password, so response times do not reveal which user
+        // names exist.
+        hasher.VerifyHashedPassword(UnknownUser.Instance, UnknownUser.PasswordHash, request.Password);
+        return SignInFailed();
+    }
+    // One answer for a wrong password and a locked account, for the same reason.
+    var result = await signIn.PasswordSignInAsync(user, request.Password, isPersistent: false, lockoutOnFailure: true);
+    return result.Succeeded ? Results.NoContent() : SignInFailed();
+}).AllowAnonymous().RequireRateLimiting("sign-in");
+
+account.MapPost("/logout", async (SignInManager<IdentityUser> signIn) =>
+{
+    // Removes the server-side session, so the cookie is worthless even if it was copied.
     await signIn.SignOutAsync();
     return Results.NoContent();
 });
 
-// The API, for bearer tokens only.
-var api = app.MapGroup("/api").RequireAuthorization("Api");
-
-api.MapGet("/me", (ClaimsPrincipal user) => new
-{
-    Name = user.Identity?.Name,
-    Claims = user.Claims.Select(c => new { c.Type, c.Value }),
-});
+// The API: same origin, the session cookie, and the form token on anything that changes data.
+var api = app.MapGroup("/api").AddEndpointFilter(Csrf.Validate);
 
 api.MapGet("/notes", async (ClaimsPrincipal user, AppDbContext db) =>
 {
@@ -113,9 +173,9 @@ api.MapGet("/notes", async (ClaimsPrincipal user, AppDbContext db) =>
 
 api.MapPost("/notes", async (NewNote input, ClaimsPrincipal user, AppDbContext db) =>
 {
-    if (string.IsNullOrWhiteSpace(input.Text))
+    if (string.IsNullOrWhiteSpace(input.Text) || input.Text.Length > 500)
     {
-        return Results.ValidationProblem(new Dictionary<string, string[]> { ["text"] = ["Write something first."] });
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["text"] = ["Write between 1 and 500 characters."] });
     }
     var note = new Note { OwnerId = UserId(user), Text = input.Text.Trim(), Created = DateTimeOffset.UtcNow };
     db.Notes.Add(note);
@@ -136,7 +196,7 @@ api.MapGet("/users", async (AppDbContext db) =>
     await db.Users.OrderBy(u => u.UserName)
         .Select(u => new { u.UserName, u.Email, Notes = db.Notes.Count(n => n.OwnerId == u.Id) })
         .ToListAsync())
-    .RequireAuthorization(policy => policy.AddAuthenticationSchemes(IdentityConstants.BearerScheme).RequireRole(Seed.AdminRole));
+    .RequireAuthorization("Admin");
 
 // Built client files are public: the login page needs its own, and they hold no data.
 app.MapStaticAssets().AllowAnonymous();
@@ -150,7 +210,10 @@ app.Run();
 
 static string UserId(ClaimsPrincipal user) => user.FindFirstValue(ClaimTypes.NameIdentifier)!;
 
-static Task StatusOrRedirect(RedirectContext<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions> context, int status)
+static IResult SignInFailed() =>
+    Results.Problem("Wrong user name or password, or too many attempts. Try again in a few minutes.", statusCode: StatusCodes.Status401Unauthorized);
+
+static Task StatusOrRedirect(Microsoft.AspNetCore.Authentication.RedirectContext<CookieAuthenticationOptions> context, int status)
 {
     if (context.Request.Path.StartsWithSegments("/api") || context.Request.Path.StartsWithSegments("/account"))
     {
@@ -163,6 +226,14 @@ static Task StatusOrRedirect(RedirectContext<Microsoft.AspNetCore.Authentication
     return Task.CompletedTask;
 }
 
-record LoginRequest(string UserName, string Password, bool Remember = false);
+record LoginRequest(string UserName, string Password);
 record NewNote(string Text);
 record NoteDto(int Id, string Text, DateTimeOffset Created);
+
+/// <summary>A stand-in to check passwords against when the user name does not exist.</summary>
+static class UnknownUser
+{
+    public static readonly IdentityUser Instance = new();
+    public static readonly string PasswordHash =
+        new PasswordHasher<IdentityUser>().HashPassword(Instance, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+}

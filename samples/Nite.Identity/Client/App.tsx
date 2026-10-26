@@ -119,8 +119,12 @@ function Identity() {
       <h2>What the server passed in</h2>
       <p className="muted">
         <code>NiteOptions.ClientConfig</code> in <code>Program.cs</code> wrote these into the page as it was served;
-        this app reads them with <code>import {"{ config }"} from "nite:config"</code>.
+        this app reads them with <code>import {"{ config }"} from "nite:config"</code>. There is no credential among
+        them: the session is an <code>HttpOnly</code> cookie that no script can read, and the API on this origin
+        accepts it together with the page's form token.
       </p>
+      <h3>Roles</h3>
+      <p>{user.roles.length > 0 ? user.roles.join(", ") : "none"}</p>
       <h3>Claims</h3>
       <table>
         <tbody>
@@ -132,11 +136,6 @@ function Identity() {
           ))}
         </tbody>
       </table>
-      <h3>Bearer token</h3>
-      <p>
-        Sent with every <code>/api</code> call; expires {new Date(config.tokenExpires!).toLocaleTimeString()}.
-      </p>
-      <pre className="token">{config.token}</pre>
     </section>
   );
 }

@@ -2,18 +2,17 @@
 declare module "nite:config" {
   /**
    * What NiteOptions.ClientConfig returns in Program.cs, written into each page by the server.
-   * Signed-in users get their claims and a bearer token for the API; the login page, served to
-   * everyone, gets them only when someone is already signed in.
+   * There is no credential here: the session is an HttpOnly cookie that scripts cannot read.
    */
   export interface NiteClientConfig {
+    /** Sent back in the X-CSRF-Token header on requests that change data. */
+    csrfToken: string;
+    /** Who is signed in; absent on the login page for signed-out visitors. */
     user?: {
       name: string;
       roles: string[];
       claims: { type: string; value: string }[];
     };
-    /** Send as `Authorization: Bearer <token>` to /api. */
-    token?: string;
-    tokenExpires?: string;
   }
 
   export const config: Readonly<NiteClientConfig>;

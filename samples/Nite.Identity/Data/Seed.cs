@@ -9,11 +9,19 @@ namespace Nite.Identity.Data;
 /// benson/hedges. Everything is a constant, because migrations compare the model each time: a
 /// password hashed here at run time would get a new salt, and EF would see a changed model on every
 /// build. The hashes came from <see cref="PasswordHasher{TUser}"/>. Seeding skips Identity's
-/// password rules, which would reject passwords this short for anyone signing up.
+/// password rules, which would reject passwords this short for anyone signing up. Because these
+/// passwords are public, the app will not start outside Development while they are still in use
+/// (<see cref="Security.DemoUsers"/>).
 /// </summary>
 internal static class Seed
 {
     public const string AdminRole = "Admin";
+
+    private const string AdminPasswordHash = "AQAAAAIAAYagAAAAEODiDX1efDhq8qqnrD2pD0WI0E5xXrlroamxMoU9SKnKbsrnKa6gilt4bT8zABkfLg==";
+    private const string BensonPasswordHash = "AQAAAAIAAYagAAAAEO901dzVMhVZPtSbDR90Ni8PSYIq62FWmkmNgZHIRySSLT1ljfmPm0KDHTFr5v3FzQ==";
+
+    /// <summary>The seeded password hashes, whose passwords are public; see <see cref="Security.DemoUsers"/>.</summary>
+    public static readonly string[] DemoPasswordHashes = [AdminPasswordHash, BensonPasswordHash];
 
     private const string AdminRoleId = "4f3c1c7e-2a7b-4f7e-9d0a-6a1d8a6e0b01";
     private const string AdminId = "0b8f9a52-5c1e-4c55-8f0e-1d2a3b4c5d01";
@@ -30,10 +38,8 @@ internal static class Seed
         });
 
         builder.Entity<IdentityUser>().HasData(
-            User(AdminId, "admin", "admin@example.com",
-                "AQAAAAIAAYagAAAAEODiDX1efDhq8qqnrD2pD0WI0E5xXrlroamxMoU9SKnKbsrnKa6gilt4bT8zABkfLg==", stamp: "A1"),
-            User(BensonId, "benson", "benson@example.com",
-                "AQAAAAIAAYagAAAAEO901dzVMhVZPtSbDR90Ni8PSYIq62FWmkmNgZHIRySSLT1ljfmPm0KDHTFr5v3FzQ==", stamp: "B2"));
+            User(AdminId, "admin", "admin@example.com", AdminPasswordHash, stamp: "A1"),
+            User(BensonId, "benson", "benson@example.com", BensonPasswordHash, stamp: "B2"));
 
         builder.Entity<IdentityUserRole<string>>().HasData(new IdentityUserRole<string> { UserId = AdminId, RoleId = AdminRoleId });
 
