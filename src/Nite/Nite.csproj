@@ -23,6 +23,19 @@
     <InternalsVisibleTo Include="Nite.Tests" />
   </ItemGroup>
 
+  <!--
+    Log messages are Markdown files in Diagnostics/, compiled by Nite.Diagnostics into internal
+    Nite.Log methods; the docs site publishes the same files. The generator is a build-time tool:
+    PrivateAssets keeps it out of the Nite package's dependencies.
+  -->
+  <PropertyGroup>
+    <NiteDiagnosticsHelpUrl>https://nitefx.dev/docs/reference/diagnostics/{code}.html</NiteDiagnosticsHelpUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nite.Diagnostics\Nite.Diagnostics.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+  <Import Project="..\Nite.Diagnostics\build\Nite.Diagnostics.targets" />
+
   <ItemGroup>
     <!-- NuGet imports build/<PackageId>.targets into consuming projects automatically. -->
     <None Include="..\..\build\Nite.targets" Pack="true" PackagePath="build\Nite.targets" Visible="false" />

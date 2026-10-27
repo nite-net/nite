@@ -1,0 +1,26 @@
+<Project>
+
+  <!--
+    Every Markdown file under $(NiteDiagnosticsDirectory) (Diagnostics by default) is a log message
+    for the generator. Set the properties below in the project file to change where they are and
+    what the generated class is called.
+  -->
+  <PropertyGroup>
+    <NiteDiagnosticsDirectory Condition="'$(NiteDiagnosticsDirectory)' == ''">Diagnostics</NiteDiagnosticsDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="$(NiteDiagnosticsDirectory)/**/*.md" NiteDiagnostic="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="NiteDiagnostic" />
+    <CompilerVisibleProperty Include="RootNamespace" />
+    <!-- Namespace of the generated class; RootNamespace when empty. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsNamespace" />
+    <!-- Name of the generated class; Log when empty. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsClass" />
+    <!-- true makes the class public; it is internal otherwise. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsPublic" />
+    <!-- A URL with {code} in it, such as https://example.com/logs/{code}.html: linked from each method's docs. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsHelpUrl" />
+  </ItemGroup>
+
+</Project>

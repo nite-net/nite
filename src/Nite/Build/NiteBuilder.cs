@@ -119,7 +119,7 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, 
 
         if (entries.Count == 0)
         {
-            _logger.LogWarning("Nothing to build: no islands in {Islands}, no index.html and no \"entries\" in nite.json", project.IslandsDirectory);
+            _logger.NothingToBuild(project.IslandsDirectory);
             await File.WriteAllTextAsync(Path.Combine(project.OutputDirectory, NiteManifest.FileName), manifest.ToJson(), cancellationToken);
             return manifest;
         }

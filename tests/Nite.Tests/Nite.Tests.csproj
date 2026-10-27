@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <!-- Drives the Nite.Diagnostics generator; the same version it is built against. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -25,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nite\Nite.csproj" />
     <ProjectReference Include="..\..\src\Nite.Cli\Nite.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Nite.Diagnostics\Nite.Diagnostics.csproj" />
   </ItemGroup>
 
 </Project>
