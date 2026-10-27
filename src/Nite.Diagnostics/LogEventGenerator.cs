@@ -106,7 +106,9 @@ public sealed class LogEventGenerator : IIncrementalGenerator
             accepted.Add((file.Path, e));
         }
 
-        if (accepted.Count > 0)
+        // The class is generated whenever there are message files, even if none is valid yet, so
+        // the namespace the build imports (Nite.Diagnostics.targets) always exists.
+        if (files.Length > 0)
         {
             context.AddSource(settings.ClassName + ".LogMessages.g.cs", SourceText.From(Generate(accepted, settings), Encoding.UTF8));
         }

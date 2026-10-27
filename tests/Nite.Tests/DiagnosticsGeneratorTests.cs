@@ -158,6 +158,17 @@ public class DiagnosticsGeneratorTests
     }
 
     [Fact]
+    public void Generates_the_class_even_when_every_file_has_errors()
+    {
+        // The build imports the class's namespace whenever there are message files, so the
+        // namespace must exist even before any file is valid.
+        var result = Run(("Diagnostics/bad.md", "---\ncode: X\neventId: 1\nlevel: Loud\nmessage: m\n---\n# T\n"));
+
+        Assert.Equal("NDIAG004", Assert.Single(result.Diagnostics).Id);
+        Assert.NotNull(result.Assembly.GetType("Test.Log"));
+    }
+
+    [Fact]
     public void Ignores_additional_files_without_the_metadata()
     {
         var result = Run([("README.md", AgentDisconnected)], [], marked: false);

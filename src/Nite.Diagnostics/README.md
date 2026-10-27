@@ -36,9 +36,10 @@ logger.AgentDisconnected(agentId, 42);
 // warn: MyApp[7007] Agent 6f1c… disconnected after 42 seconds
 ```
 
-The methods are in a class named `Log` in your project's root namespace. Code in that namespace
-sees them as they are; elsewhere, including top-level statements in `Program.cs`, add
-`using MyApp;` (your root namespace) or set `NiteDiagnosticsNamespace`.
+The methods are in a class named `Log` in your project's root namespace, and the package imports
+that namespace in every file as a global using, so they work everywhere, top-level statements in
+`Program.cs` included, whether or not `ImplicitUsings` is on. Set `NiteDiagnosticsGlobalUsing` to
+`false` to write the `using` yourself.
 
 - The method is named after the `# Title`, or `method:` if you set one.
 - Each `{Placeholder}` becomes a parameter, logged as a structured property. `parameters:` gives
@@ -61,6 +62,7 @@ Set these in your project file:
 | `NiteDiagnosticsNamespace` | `$(RootNamespace)` | Namespace of the generated class. |
 | `NiteDiagnosticsClass` | `Log` | Name of the generated class. |
 | `NiteDiagnosticsPublic` | `false` | `true` makes the class public instead of internal. |
+| `NiteDiagnosticsGlobalUsing` | `true` | Import the class's namespace in every file. `false` leaves that to you. |
 | `NiteDiagnosticsHelpUrl` | none | A URL with `{code}` in it, linked from each method's docs. |
 
 ## Errors at build time
