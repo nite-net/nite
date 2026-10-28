@@ -83,14 +83,17 @@ public static class NiteExtensions
 
     /// <summary>
     /// In development, serves compiled modules, dependencies and the HMR socket under <c>/_nite</c>.
-    /// In production this does nothing: the build output is ordinary static files in <c>wwwroot/_nite</c>.
-    /// Call it before <c>UseRouting</c>/<c>MapStaticAssets</c>.
+    /// In production the build output in <c>wwwroot/_nite</c> is ordinary static files; this only
+    /// marks the ones with a content hash in their name as immutable, so browsers never revalidate
+    /// them. Call it before <c>UseRouting</c>, <c>UseStaticFiles</c> and <c>MapStaticAssets</c>.
     /// </summary>
     public static IApplicationBuilder UseNite(this IApplicationBuilder app)
     {
         if (!IsDevelopment(app.ApplicationServices))
         {
-            return app;
+            // Production: the build output is served by MapStaticAssets or UseStaticFiles; its
+            // hashed files can be cached for good.
+            return app.UseImmutableAssets();
         }
 
         var server = app.ApplicationServices.GetRequiredService<NiteDevServer>();

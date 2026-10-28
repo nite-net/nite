@@ -11,7 +11,7 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error");
 }
 
-// Development: compiles Client/ on request with hot updates. Production: no-op.
+// Development: compiles Client/ on request with hot updates. Production: caches hashed bundles for good.
 app.UseNite();
 
 app.UseRouting();

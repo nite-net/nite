@@ -9,7 +9,7 @@ builder.Services.AddSingleton<TodoStore>();
 
 var app = builder.Build();
 
-// Development: compiles Client/ on request and pushes hot updates. Production: no-op.
+// Development: compiles Client/ on request and pushes hot updates. Production: caches hashed bundles for good.
 app.UseNite();
 
 var api = app.MapGroup("/api");
