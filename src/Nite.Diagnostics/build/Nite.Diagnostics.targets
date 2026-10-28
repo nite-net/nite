@@ -1,0 +1,40 @@
+<Project>
+
+  <!--
+    Every Markdown file under $(NiteDiagnosticsDirectory) (Diagnostics by default) is a log message
+    for the generator. Set the properties below in the project file to change where they are and
+    what the generated class is called.
+  -->
+  <PropertyGroup>
+    <NiteDiagnosticsDirectory Condition="'$(NiteDiagnosticsDirectory)' == ''">Diagnostics</NiteDiagnosticsDirectory>
+    <!-- false leaves importing the generated class's namespace to you. -->
+    <NiteDiagnosticsGlobalUsing Condition="'$(NiteDiagnosticsGlobalUsing)' == ''">true</NiteDiagnosticsGlobalUsing>
+    <_NiteDiagnosticsNamespace>$(NiteDiagnosticsNamespace)</_NiteDiagnosticsNamespace>
+    <_NiteDiagnosticsNamespace Condition="'$(_NiteDiagnosticsNamespace)' == ''">$(RootNamespace)</_NiteDiagnosticsNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="$(NiteDiagnosticsDirectory)/**/*.md" NiteDiagnostic="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="NiteDiagnostic" />
+    <CompilerVisibleProperty Include="RootNamespace" />
+    <!-- Namespace of the generated class; RootNamespace when empty. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsNamespace" />
+    <!-- Name of the generated class; Log when empty. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsClass" />
+    <!-- true makes the class public; it is internal otherwise. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsPublic" />
+    <!-- A URL with {code} in it, such as https://example.com/logs/{code}.html: linked from each method's docs. -->
+    <CompilerVisibleProperty Include="NiteDiagnosticsHelpUrl" />
+  </ItemGroup>
+
+  <!--
+    Imports the generated class's namespace in every file (the SDK's global usings, which work with
+    ImplicitUsings on or off), so the methods are found from Program.cs too. Only when there are
+    message files: a global using of a namespace with no types in it does not compile. Importing a
+    namespace twice (another <Using>, or global using in a .cs file) is harmless.
+  -->
+  <ItemGroup Condition="'$(NiteDiagnosticsGlobalUsing)' == 'true' and '$(_NiteDiagnosticsNamespace)' != '' and '@(AdditionalFiles->WithMetadataValue('NiteDiagnostic', 'true'))' != ''">
+    <Using Include="$(_NiteDiagnosticsNamespace)" />
+  </ItemGroup>
+
+</Project>

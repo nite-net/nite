@@ -144,8 +144,7 @@ public sealed class PackageInstaller
 
             if (visible is not null && isPeer)
             {
-                _logger.LogWarning("{Parent} wants peer {Name}@{Range} but {Version} is installed",
-                    PackageNameAt(parent), name, rangeText, placed[visible].Version);
+                _logger.PeerVersionMismatch(PackageNameAt(parent), name, rangeText, placed[visible].Version);
                 continue;
             }
 

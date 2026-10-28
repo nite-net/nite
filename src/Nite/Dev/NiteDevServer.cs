@@ -1499,7 +1499,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         var relative = _project.RelativeToClientRoot(file);
         if (!_project.Config.Entries.Any(e => NitePaths.ToUrlPath(e).TrimStart('/') == relative) && _warnedModules.TryAdd(relative, 0))
         {
-            _logger.LogWarning("'{Module}' is not listed in \"entries\" in nite.json, so production builds will not include it", relative);
+            _logger.ModuleNotInEntries(relative);
         }
         return ValueTask.FromResult(SourceAsset(file, context));
     }

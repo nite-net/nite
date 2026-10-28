@@ -380,6 +380,21 @@ useEffect(() => {
 
 The event never fires in production, so this costs nothing there.
 
+## Log messages as Markdown (`Nite.Diagnostics`)
+
+A separate package, usable in any .NET project. Write each log message as a Markdown file in
+`Diagnostics/`, with its code, event ID, level and message template in the front matter. A source
+generator turns it into an `ILogger` extension method backed by `LoggerMessage.Define`, and the
+rest of the file documents the message:
+
+```csharp
+logger.AgentDisconnected(agentId, 42);   // from Diagnostics/AGENT007.md
+```
+
+NiteFx's own warnings are written this way (`src/Nite/Diagnostics`), and the same files are its
+[log message reference](https://nitefx.dev/docs/reference/diagnostics/). See
+[src/Nite.Diagnostics](src/Nite.Diagnostics/README.md).
+
 ## Telemetry and health checks
 
 NiteFx reports what it does as OpenTelemetry traces and metrics, through .NET's own

@@ -1,9 +1,9 @@
 name: Build and publish
 
-# Every push and pull request builds, tests and packs Nite, Nite.Cli and Nite.Templates. Pushing a
-# tag such as v0.6.0 also publishes the three packages to nuget.org, as version 0.6.0: the tag is
-# the version, so there is nothing to bump first. Other builds are prereleases of the next patch
-# after the newest tag (0.6.1-ci.<run number>).
+# Every push and pull request builds, tests and packs Nite, Nite.Cli, Nite.Templates and
+# Nite.Diagnostics. Pushing a tag such as v0.6.0 also publishes the packages to nuget.org, as
+# version 0.6.0: the tag is the version, so there is nothing to bump first. Other builds are
+# prereleases of the next patch after the newest tag (0.6.1-ci.<run number>).
 #
 # Publishing uses nuget.org trusted publishing, so no long-lived API key is stored anywhere: the
 # job exchanges a GitHub OIDC token for an API key that is valid for an hour. It needs:
@@ -82,6 +82,7 @@ jobs:
           dotnet pack src/Nite -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
           dotnet pack src/Nite.Cli -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
           dotnet pack src/Nite.Templates -c Release -o artifacts -p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/Nite.Diagnostics -c Release --no-build -o artifacts -p:Version=${{ steps.version.outputs.version }}
 
       - uses: actions/upload-artifact@v4
         with:

@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Nite.Cli/Nite.Cli.csproj" />
+    <Project Path="src/Nite.Diagnostics/Nite.Diagnostics.csproj" />
     <Project Path="src/Nite/Nite.csproj" />
     <Project Path="src/Nite.Templates/Nite.Templates.csproj" />
   </Folder>

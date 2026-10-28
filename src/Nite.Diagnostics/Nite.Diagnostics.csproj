@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A source generator: log messages written as Markdown files become ILogger extension methods,
+    and the same files are the documentation for each message. netstandard2.0 because compilers
+    load generators on .NET Framework (Visual Studio) as well as .NET.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <Description>Write log messages as Markdown files: a source generator turns each into a fast, structured ILogger extension method, and the same files document every message.</Description>
+    <PackageTags>logging;source-generator;markdown;documentation;nitefx</PackageTags>
+    <!-- Only a generator: nothing for the consuming project to reference at run time. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The oldest compiler the generator runs on is the one this references: VS 2022 17.12 / .NET 9 SDK. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="build\Nite.Diagnostics.targets" Pack="true" PackagePath="build" />
+    <!-- This package has its own README rather than the repository's. -->
+    <None Remove="$(MSBuildThisFileDirectory)..\..\README.md" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nite.Tests" />
+  </ItemGroup>
+
+</Project>
