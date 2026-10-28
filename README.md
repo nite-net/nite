@@ -104,7 +104,7 @@ MyApp/
 builder.Services.AddNite();
 
 var app = builder.Build();
-app.UseNite();                       // dev server under /_nite; no-op outside Development
+app.UseNite();                       // dev server under /_nite; in production, caches hashed bundles
 
 app.MapGet("/api/todos", ...);       // your API, same origin as the app
 app.MapStaticAssets();
@@ -524,8 +524,7 @@ NiteFx is intentionally smaller than Vite. Things it does not do (yet, or ever):
   your code instead, as Mantine does). The importer warns about each of these when a project uses
   them. Relative `url()`s inside Sass partials are not rebased (Vite does rebase them).
 - Production asset URLs assume the app is served from the site root (`/_nite/...`), except in
-  HTML served by `MapNiteSpa`, which adds the request's path base. Hashed bundles are revalidated
-  with ETags rather than cached as immutable.
+  HTML served by `MapNiteSpa`, which adds the request's path base.
 
 ## Development
 

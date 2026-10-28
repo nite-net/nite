@@ -129,7 +129,7 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseSecurityHeaders();
 
-// Development: compiles Client/ on request with hot updates. Production: no-op.
+// Development: compiles Client/ on request with hot updates. Production: caches hashed bundles for good.
 app.UseNite();
 
 app.UseAuthentication();

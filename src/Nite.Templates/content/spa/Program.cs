@@ -5,7 +5,7 @@ builder.Services.AddNite();
 
 var app = builder.Build();
 
-// Development: compiles Client/ on request with hot updates. Production: no-op.
+// Development: compiles Client/ on request with hot updates. Production: caches hashed bundles for good.
 app.UseNite();
 
 app.MapGet("/api/hello", () => new { message = "Hello from ASP.NET Core", time = DateTimeOffset.Now });
