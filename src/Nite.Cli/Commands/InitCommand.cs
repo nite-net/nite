@@ -162,7 +162,8 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
               </ItemGroup>
 
               <PropertyGroup>
-                <NiteCliPath>$(MSBuildThisFileDirectory){relative}\src\Nite.Cli\bin\$(Configuration)\net10.0\Nite.Cli.dll</NiteCliPath>
+                <!-- The CLI build for this app's framework: the project reference above builds that one. -->
+                <NiteCliPath>$(MSBuildThisFileDirectory){relative}\src\Nite.Cli\bin\$(Configuration)\$(TargetFramework)\Nite.Cli.dll</NiteCliPath>
               </PropertyGroup>
 
               <Import Project="{relative}\build\Nite.targets" />
