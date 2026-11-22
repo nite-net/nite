@@ -20,6 +20,23 @@
   "preferNameDirectory": true,
   "defaultName": "NiteApp",
   "symbols": {
+    "Framework": {
+      "type": "parameter",
+      "description": "The target framework for the project.",
+      "datatype": "choice",
+      "choices": [
+        {
+          "choice": "net10.0",
+          "description": "Target .NET 10"
+        },
+        {
+          "choice": "net11.0",
+          "description": "Target .NET 11"
+        }
+      ],
+      "defaultValue": "net10.0",
+      "replaces": "NITE_FRAMEWORK"
+    },
     "title": {
       "type": "derived",
       "valueSource": "name",

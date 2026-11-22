@@ -60,6 +60,7 @@ public partial class TemplateTests
             ["NITE_TITLE"] = "My-App",
             ["NITE_NAMESPACE"] = "My_App",
             ["NITE_PORT"] = "5123",
+            ["NITE_FRAMEWORK"] = "net11.0",
         };
 
         foreach (var (file, text) in ProjectTemplates.For(template))
@@ -71,6 +72,35 @@ public partial class TemplateTests
         var project = InitCommand.Fill(ProjectTemplates.For(template)["NiteApp.csproj"], replacements);
         Assert.Contains("<!-- reference -->", project);
         Assert.Contains("<RootNamespace>My_App</RootNamespace>", project);
+        Assert.Contains("<TargetFramework>net11.0</TargetFramework>", project);
+    }
+
+    [Theory]
+    [InlineData(ProjectTemplates.Spa)]
+    [InlineData(ProjectTemplates.Islands)]
+    public void Dotnet_new_offers_the_frameworks_nite_init_does(string template)
+    {
+        using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(Content, template, ".template.config", "template.json")));
+        var framework = json.RootElement.GetProperty("symbols").GetProperty("Framework");
+
+        Assert.Equal(ProjectTemplates.Frameworks, framework.GetProperty("choices").EnumerateArray().Select(c => c.GetProperty("choice").GetString()));
+        // The default must build on the oldest supported SDK; dotnet new -f net11.0 picks the other.
+        Assert.Equal(ProjectTemplates.Frameworks[0], framework.GetProperty("defaultValue").GetString());
+        Assert.Equal("NITE_FRAMEWORK", framework.GetProperty("replaces").GetString());
+    }
+
+    [Theory]
+    [InlineData("10.0.115", null, "net10.0")]
+    [InlineData("11.0.100", null, "net11.0")]
+    [InlineData("11.0.100-rc.2.26504.105", null, "net11.0")]
+    [InlineData("12.0.100", null, "net11.0")]
+    [InlineData("9.0.300", null, "net10.0")]
+    [InlineData(null, 10, "net10.0")]
+    [InlineData(null, 11, "net11.0")]
+    [InlineData("not a version", 11, "net11.0")]
+    public void Nite_init_targets_the_newest_framework_the_sdk_builds(string? sdk, int? runtime, string expected)
+    {
+        Assert.Equal(expected, InitCommand.DefaultFramework(sdk, runtime));
     }
 
     private static string RepositoryRoot()
