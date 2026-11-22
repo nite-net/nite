@@ -42,9 +42,12 @@ jobs:
           # tags into a shallow pull request checkout, so take the (small) full history.
           fetch-depth: 0
 
+      # nite ships builds for .NET 10 and .NET 11, and the tests run on both.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       - name: Work out the version
         id: version
