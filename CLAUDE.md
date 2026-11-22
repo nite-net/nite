@@ -11,8 +11,12 @@ the tests, and `samples/` runnable apps. The docs site is a separate repo,
 export PATH=$HOME/.dotnet:$HOME/.dotnet/tools:$PATH DOTNET_ROOT=$HOME/.dotnet
 dotnet build Nite.slnx               # everything, samples included; keep it warning-free
 dotnet test tests/Nite.Tests
-dotnet run --project src/Nite.Cli -- <command>   # the CLI from source
+dotnet run --project src/Nite.Cli -- <command>   # the CLI from source (add -f net11.0 on a .NET 11 SDK)
 ```
+
+- On a .NET 11 SDK, `Nite.Cli` and `Nite.Tests` build for net10.0 and net11.0 (the tool package
+  ships both); a .NET 10 SDK builds net10.0 only. Running the net10.0 tests needs the .NET 10
+  runtime.
 
 - `dotnet ef` needs `DOTNET_ROOT` set (above) to find the runtime.
 - To check a sample in Production, `dotnet publish` it and run the published output.

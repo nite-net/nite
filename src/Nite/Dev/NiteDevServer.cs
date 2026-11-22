@@ -71,6 +71,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
     private List<FileSystemWatcher>? _projectWatchers;
     private readonly Timer _envTimer;
     private volatile IReadOnlyList<string> _envDefines = [];
+    private volatile string? _tsconfig;
     private volatile TsconfigPaths _aliases = new();
 
     public NiteDevServer(NiteProject project, HttpClient http, ILoggerFactory loggerFactory)
@@ -627,14 +628,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             _ => "js",
         };
 
-        var result = await _esbuild!.TransformAsync(source,
-        [
-            $"--loader={loader}", "--format=esm", "--target=es2022", "--sourcemap=inline",
-            $"--sourcefile={Path.GetFileName(file)}", "--jsx=automatic", "--jsx-dev",
-            $"--jsx-import-source={_project.Config.JsxImportSource}",
-            "--define:process.env.NODE_ENV=\"development\"",
-            .. _envDefines,
-        ]);
+        var result = await _esbuild!.TransformAsync(source, TransformFlags(_project.Config, loader, file, _envDefines, _tsconfig));
 
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var imports = new List<string>();
@@ -823,10 +817,34 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         return target is not null && _project.IsInsideClientRoot(target) ? target : null;
     }
 
-    /// <summary>Reads what compiled code depends on besides the source itself: path aliases and public env vars.</summary>
+    /// <summary>
+    /// The flags a client module compiles with. <paramref name="tsconfig"/> is the
+    /// <c>--tsconfig-raw</c> flag from <see cref="ClientTsconfig"/>: a transform has no file to read
+    /// it from, and without it decorators and class fields would compile differently than in
+    /// <c>nite build</c>, which passes the same tsconfig.
+    /// </summary>
+    internal static List<string> TransformFlags(NiteConfig config, string loader, string file, IReadOnlyList<string> envDefines, string? tsconfig)
+    {
+        List<string> flags =
+        [
+            $"--loader={loader}", "--format=esm", "--target=es2022", "--sourcemap=inline",
+            $"--sourcefile={Path.GetFileName(file)}", "--jsx=automatic", "--jsx-dev",
+            $"--jsx-import-source={config.JsxImportSource}",
+            "--define:process.env.NODE_ENV=\"development\"",
+            .. envDefines,
+        ];
+        if (tsconfig is not null)
+        {
+            flags.Add(tsconfig);
+        }
+        return flags;
+    }
+
+    /// <summary>Reads what compiled code depends on besides the source itself: tsconfig (aliases and compiler options) and public env vars.</summary>
     private void LoadProjectInputs()
     {
         _aliases = TsconfigPaths.Load(_project.ClientRoot);
+        _tsconfig = ClientTsconfig.TransformFlag(_project.ClientRoot, _project.Directory);
         _envDefines = NiteEnvironment.DefineFlags(_project, NiteEnvironment.Development);
     }
 
@@ -1050,7 +1068,7 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
 
             if (changed.Any(p => Path.GetFileName(p).StartsWith("tsconfig", StringComparison.Ordinal) && p.EndsWith(".json", StringComparison.Ordinal)))
             {
-                // Path aliases may have moved; every compiled module's imports could resolve differently.
+                // Path aliases or compiler options may have changed; every compiled module could differ.
                 LoadProjectInputs();
                 _modules.Clear();
                 CountUpdate(activity, "reload");

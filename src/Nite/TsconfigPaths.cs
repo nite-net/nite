@@ -6,26 +6,39 @@ namespace Nite;
 /// <summary>
 /// <c>compilerOptions.paths</c> (and <c>baseUrl</c>) from the client's tsconfig, so imports such as
 /// <c>@/components/Button</c> resolve in the dev server the way TypeScript and esbuild resolve them.
-/// Follows <c>extends</c> and Vite's <c>references</c> layout (paths usually live in
-/// <c>tsconfig.app.json</c>).
+/// Starts from the config <see cref="ClientTsconfig.Find"/> picks (and its <c>extends</c>), so the
+/// dev server and the build agree. Aliases declared only elsewhere (the root <c>tsconfig.json</c> of
+/// Vite's layout) still apply: they are read from there, and <see cref="ClientTsconfig.ForBuild"/>
+/// hands them to the build.
 /// </summary>
 internal sealed class TsconfigPaths
 {
     private readonly List<(string Pattern, IReadOnlyList<string> Targets, string BaseDirectory)> _paths = [];
     private string? _baseUrl;
 
-    /// <summary>The config file that declared the paths, which a production build extends.</summary>
+    /// <summary>The config file that declared the paths.</summary>
     public string? SourceFile { get; private set; }
+
+    /// <summary>Each alias pattern, its targets, and the folder the targets are relative to.</summary>
+    public IReadOnlyList<(string Pattern, IReadOnlyList<string> Targets, string BaseDirectory)> Entries => _paths;
+
+    /// <summary>The resolved <c>baseUrl</c>, if any config declared one.</summary>
+    public string? BaseUrl => _baseUrl;
 
     public bool IsEmpty => _paths.Count == 0 && _baseUrl is null;
 
     public static TsconfigPaths Load(string clientRoot)
     {
         var result = new TsconfigPaths();
-        var root = Path.Combine(clientRoot, "tsconfig.json");
-        if (File.Exists(root))
+        if (ClientTsconfig.Find(clientRoot) is not { } governing)
         {
-            result.Visit(root, new HashSet<string>(StringComparer.Ordinal));
+            return result;
+        }
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        result.Visit(governing, visited);
+        if (result.IsEmpty)
+        {
+            result.Visit(Path.Combine(clientRoot, "tsconfig.json"), visited);
         }
         return result;
     }
@@ -87,13 +100,13 @@ internal sealed class TsconfigPaths
 
         var directory = Path.GetDirectoryName(file)!;
         var options = json?["compilerOptions"];
-        var baseUrl = options?["baseUrl"]?.GetValue<string>() is { } url ? Path.GetFullPath(Path.Combine(directory, url)) : null;
+        var baseUrl = String(options?["baseUrl"]) is { } url ? Path.GetFullPath(Path.Combine(directory, url)) : null;
         if (options?["paths"] is JsonObject paths && _paths.Count == 0)
         {
-            SourceFile = file;
+            SourceFile = Path.GetFullPath(file);
             foreach (var (pattern, value) in paths)
             {
-                var targets = value is JsonArray array ? array.Select(t => t?.GetValue<string>()).OfType<string>().ToList() : [];
+                var targets = value is JsonArray array ? array.Select(String).OfType<string>().ToList() : [];
                 _paths.Add((pattern, targets, baseUrl ?? directory));
             }
         }
@@ -103,7 +116,7 @@ internal sealed class TsconfigPaths
         {
             foreach (var reference in references)
             {
-                if (reference?["path"]?.GetValue<string>() is { } path)
+                if (String(reference?["path"]) is { } path)
                 {
                     var target = Path.Combine(directory, path);
                     Visit(Directory.Exists(target) ? Path.Combine(target, "tsconfig.json") : target, visited);
@@ -113,9 +126,8 @@ internal sealed class TsconfigPaths
 
         var extends = json?["extends"] switch
         {
-            JsonValue single => [single.GetValue<string>()],
-            JsonArray many => many.Select(e => e?.GetValue<string>()).OfType<string>().ToList(),
-            _ => new List<string>(),
+            JsonArray many => many.Select(String).OfType<string>().ToList(),
+            var single => String(single) is { } one ? [one] : new List<string>(),
         };
         foreach (var parent in extends.Where(e => e.StartsWith('.')))
         {
@@ -123,4 +135,7 @@ internal sealed class TsconfigPaths
             Visit(target.EndsWith(".json", StringComparison.Ordinal) ? target : target + ".json", visited);
         }
     }
+
+    /// <summary>A string value, or null for anything else (a typo in a tsconfig must not throw).</summary>
+    private static string? String(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 }

@@ -22,6 +22,10 @@ internal sealed class InitSettings : CommandSettings
     [Description("Project name. Defaults to the directory name.")]
     public string? Name { get; set; }
 
+    [CommandOption("-f|--framework <FRAMEWORK>")]
+    [Description("[green]net10.0[/] or [green]net11.0[/]. Defaults to the newest one the installed .NET SDK can build.")]
+    public string? Framework { get; set; }
+
     [CommandOption("--nite-source <PATH>")]
     [Description("Reference a Nite source checkout instead of the NuGet package.")]
     public string? NiteSource { get; set; }
@@ -48,6 +52,7 @@ internal sealed class InitSettings : CommandSettings
 
     public override ValidationResult Validate() =>
         Template is not null && !ProjectTemplates.Names.Contains(Template) ? ValidationResult.Error($"Unknown template '{Template}'. Choose {string.Join(" or ", ProjectTemplates.Names)}.")
+        : Framework is not null && !ProjectTemplates.Frameworks.Contains(Framework) ? ValidationResult.Error($"Unknown framework '{Framework}'. Choose {string.Join(" or ", ProjectTemplates.Frameworks)}.")
         : From is not null && Template is not null ? ValidationResult.Error("--from imports a project, so --template does not apply.")
         : DryRun && From is null ? ValidationResult.Error("--dry-run only applies with --from.")
         : ValidationResult.Success();
@@ -88,6 +93,7 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             ["NITE_TITLE"] = safeName,
             ["NITE_NAMESPACE"] = SafeNamespace(safeName),
             ["NITE_PORT"] = Random.Shared.Next(5100, 5900).ToString(),
+            ["NITE_FRAMEWORK"] = settings.Framework ?? DefaultFramework(await SdkVersionAsync(directory, cancellationToken)),
         };
 
         if (settings.From is not null)
@@ -156,12 +162,81 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
               </ItemGroup>
 
               <PropertyGroup>
-                <NiteCliPath>$(MSBuildThisFileDirectory){relative}\src\Nite.Cli\bin\$(Configuration)\net10.0\Nite.Cli.dll</NiteCliPath>
+                <!-- The CLI build for this app's framework: the project reference above builds that one. -->
+                <NiteCliPath>$(MSBuildThisFileDirectory){relative}\src\Nite.Cli\bin\$(Configuration)\$(TargetFramework)\Nite.Cli.dll</NiteCliPath>
               </PropertyGroup>
 
               <Import Project="{relative}\build\Nite.targets" />
 
             """;
+    }
+
+    /// <summary>
+    /// The newest framework the SDK can build: a .NET 10 SDK cannot target net11.0, and a project
+    /// on net10.0 does not run where only .NET 11 is installed. Without a known SDK version (no
+    /// dotnet on PATH), the runtime this tool runs on stands in for it.
+    /// </summary>
+    internal static string DefaultFramework(string? sdkVersion, int? runtimeMajor = null)
+    {
+        var major = sdkVersion is not null && int.TryParse(sdkVersion.Split('.')[0], out var sdkMajor)
+            ? sdkMajor
+            : runtimeMajor ?? Environment.Version.Major;
+        return ProjectTemplates.Frameworks.LastOrDefault(f => FrameworkMajor(f) <= major) ?? ProjectTemplates.Frameworks[0];
+    }
+
+    private static int FrameworkMajor(string framework) => int.Parse(framework["net".Length..framework.IndexOf('.')]);
+
+    /// <summary><c>dotnet --version</c> where the project goes, so a global.json there is honored; null if it fails or takes over 10 seconds.</summary>
+    private static async Task<string?> SdkVersionAsync(string directory, CancellationToken cancellationToken)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
+        {
+            WorkingDirectory = ExistingAncestor(directory),
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        System.Diagnostics.Process? process;
+        try
+        {
+            process = System.Diagnostics.Process.Start(start);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null; // no dotnet on PATH
+        }
+        if (process is null)
+        {
+            return null;
+        }
+
+        using (process)
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            try
+            {
+                var output = (await process.StandardOutput.ReadToEndAsync(timeout.Token)).Trim();
+                await process.WaitForExitAsync(timeout.Token);
+                return process.ExitCode == 0 && output.Length > 0 ? output : null;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                process.Kill(entireProcessTree: true);
+                return null;
+            }
+        }
+    }
+
+    private static string ExistingAncestor(string directory)
+    {
+        for (var current = directory; current is not null; current = Path.GetDirectoryName(current))
+        {
+            if (Directory.Exists(current))
+            {
+                return current;
+            }
+        }
+        return Environment.CurrentDirectory;
     }
 
     internal static string Fill(string text, IReadOnlyDictionary<string, string> replacements) =>
