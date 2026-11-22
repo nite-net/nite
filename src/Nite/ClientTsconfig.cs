@@ -13,9 +13,8 @@ namespace Nite;
 /// <remarks>
 /// Vite projects keep a solution-style <c>tsconfig.json</c> (<c>"files": []</c> plus
 /// <c>references</c>) whose real options live in <c>tsconfig.app.json</c>. esbuild does not follow
-/// <c>references</c>, so the governing file is picked here: the file that declares path aliases,
-/// else the referenced config for app code (not <c>tsconfig.node.json</c>, which covers the Vite
-/// config), else <c>tsconfig.json</c> itself.
+/// <c>references</c>, so the governing file is picked here: the referenced config for app code (not
+/// <c>tsconfig.node.json</c>, which covers the Vite config), else <c>tsconfig.json</c> itself.
 /// </remarks>
 internal static class ClientTsconfig
 {
@@ -32,7 +31,7 @@ internal static class ClientTsconfig
 
     private static readonly JsonDocumentOptions Lenient = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
-    /// <summary>The governing tsconfig, or null when the client has none.</summary>
+    /// <summary>The governing tsconfig, or null when the client has none. Path aliases do not affect the choice.</summary>
     public static string? Find(string clientRoot)
     {
         var root = Path.Combine(clientRoot, "tsconfig.json");
@@ -40,29 +39,95 @@ internal static class ClientTsconfig
         {
             return null;
         }
-        if (TsconfigPaths.Load(clientRoot).SourceFile is { } aliases)
-        {
-            return aliases;
-        }
 
-        var json = Parse(root);
-        if (json?["references"] is JsonArray references && json["compilerOptions"] is null)
+        // A root with references (Vite's layout) is not the config for the app's code, even when it
+        // also has compilerOptions: shadcn's setup puts paths there as well as in tsconfig.app.json.
+        if (Parse(root)?["references"] is JsonArray references)
         {
             var directory = Path.GetDirectoryName(root)!;
-            var candidates = references
-                .Select(r => r?["path"]?.GetValue<string>())
+            var app = references
+                .Select(r => r?["path"] is JsonValue value && value.TryGetValue<string>(out var path) ? path : null)
                 .OfType<string>()
                 .Select(p => Path.Combine(directory, p))
                 .Select(p => Directory.Exists(p) ? Path.Combine(p, "tsconfig.json") : p)
                 .Where(File.Exists)
-                .ToList();
-            if (candidates.FirstOrDefault(p => !Path.GetFileName(p).Contains("node", StringComparison.OrdinalIgnoreCase)) is { } app)
+                .FirstOrDefault(p => !Path.GetFileName(p).Contains("node", StringComparison.OrdinalIgnoreCase));
+            if (app is not null)
             {
                 return Path.GetFullPath(app);
             }
         }
         return Path.GetFullPath(root);
     }
+
+    /// <summary>
+    /// The file for <c>nite build</c>'s <c>--tsconfig</c>. Usually <see cref="Find"/>'s file (esbuild
+    /// follows its <c>extends</c>, so paths in a base config still resolve). When the only path aliases
+    /// are declared outside that file's chain (paths in the root <c>tsconfig.json</c> of Vite's layout,
+    /// not in <c>tsconfig.app.json</c>), the dev server still resolves them through
+    /// <see cref="TsconfigPaths"/>, so the build gets a generated config in <paramref name="workDirectory"/>
+    /// that extends the governing file and adds those aliases.
+    /// </summary>
+    public static string? ForBuild(string clientRoot, string workDirectory, string? projectDirectory = null)
+    {
+        if (Find(clientRoot) is not { } file)
+        {
+            return null;
+        }
+
+        var aliases = TsconfigPaths.Load(clientRoot);
+        if (aliases.SourceFile is not { } declaring || Chain(file, projectDirectory ?? clientRoot).Contains(declaring))
+        {
+            return file;
+        }
+
+        Directory.CreateDirectory(workDirectory);
+        var generated = Path.Combine(workDirectory, "tsconfig.build.json");
+        string Relative(string path) => "./" + Path.GetRelativePath(workDirectory, path).Replace('\\', '/');
+        var paths = new JsonObject();
+        foreach (var (pattern, targets, baseDirectory) in aliases.Entries)
+        {
+            paths[pattern] = new JsonArray(targets.Select(t => (JsonNode)Relative(Path.Combine(baseDirectory, t))).ToArray());
+        }
+        var options = new JsonObject { ["paths"] = paths };
+        if (aliases.BaseUrl is { } baseUrl)
+        {
+            options["baseUrl"] = Relative(baseUrl);
+        }
+        var json = new JsonObject { ["extends"] = file, ["compilerOptions"] = options };
+        File.WriteAllText(generated, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        return generated;
+    }
+
+    /// <summary>A config and the configs it extends, as full paths.</summary>
+    internal static HashSet<string> Chain(string file, string projectDirectory)
+    {
+        var chain = new HashSet<string>(StringComparer.Ordinal);
+        void Visit(string current)
+        {
+            if (!chain.Add(Path.GetFullPath(current)) || Parse(current) is not { } json)
+            {
+                return;
+            }
+            foreach (var parent in Extends(json))
+            {
+                if (ResolveExtends(Path.GetDirectoryName(current)!, parent, projectDirectory) is { } target)
+                {
+                    Visit(target);
+                }
+            }
+        }
+        Visit(file);
+        return chain;
+    }
+
+    /// <summary>The <c>extends</c> entries of a config; a value of the wrong type counts as none.</summary>
+    private static List<string> Extends(JsonNode json) => json["extends"] switch
+    {
+        JsonValue single when single.TryGetValue<string>(out var one) => [one],
+        JsonArray many => many.Select(e => e is JsonValue value && value.TryGetValue<string>(out var each) ? each : null).OfType<string>().ToList(),
+        _ => [],
+    };
 
     /// <summary>
     /// The <c>--tsconfig-raw</c> flag for a transform: the governing file's compiler options with
@@ -98,13 +163,7 @@ internal static class ClientTsconfig
         }
 
         var directory = Path.GetDirectoryName(file)!;
-        var extends = json["extends"] switch
-        {
-            JsonValue single => [single.GetValue<string>()],
-            JsonArray many => many.Select(e => e?.GetValue<string>()).OfType<string>().ToList(),
-            _ => new List<string>(),
-        };
-        foreach (var parent in extends)
+        foreach (var parent in Extends(json))
         {
             if (ResolveExtends(directory, parent, projectDirectory) is { } target)
             {

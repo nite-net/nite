@@ -4,7 +4,9 @@ namespace Nite.Cli.Templates;
 
 /// <summary>
 /// The files <c>nite init</c> writes: the <c>dotnet new</c> templates in src/Nite.Templates/content,
-/// embedded in the CLI so both write the same projects. Placeholders, which template.json maps for
+/// embedded in the CLI so both write the same files.
+/// The one difference is the default target framework: <c>dotnet new</c> cannot see which SDK is
+/// installed, so it defaults to net10.0, while <c>nite init</c> picks the newest the SDK can build. Placeholders, which template.json maps for
 /// <c>dotnet new</c>: NiteApp (the project file name), NITE_TITLE (project name), NITE_NAMESPACE
 /// (a valid C# namespace), NITE_PORT, NITE_FRAMEWORK (net10.0 or net11.0) and
 /// <see cref="PackageReference"/> (how the project gets Nite).

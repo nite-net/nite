@@ -54,6 +54,51 @@ public class ClientTsconfigTests : IDisposable
     }
 
     [Fact]
+    public void Prefers_the_app_config_even_when_the_root_declares_paths()
+    {
+        // shadcn's Vite setup: paths in both files, compiler options only in the app config.
+        Write("tsconfig.json", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }], "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"] } } }""");
+        Write("tsconfig.app.json", """{ "compilerOptions": { "experimentalDecorators": true, "baseUrl": ".", "paths": { "@/*": ["./src/*"] } } }""");
+
+        Assert.Equal(Full("tsconfig.app.json"), ClientTsconfig.Find(_root.FullName));
+        Assert.Equal(Full("tsconfig.app.json"), ClientTsconfig.ForBuild(_root.FullName, Full(".nite")));
+    }
+
+    [Fact]
+    public void Builds_with_the_governing_file_when_its_base_declares_paths()
+    {
+        Write("tsconfig.base.json", """{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }""");
+        Write("tsconfig.json", """{ "extends": "./tsconfig.base.json", "compilerOptions": { "experimentalDecorators": true } }""");
+
+        Assert.Equal(Full("tsconfig.json"), ClientTsconfig.ForBuild(_root.FullName, Full(".nite")));
+        Assert.Equal(Full("tsconfig.base.json"), TsconfigPaths.Load(_root.FullName).SourceFile);
+    }
+
+    [Fact]
+    public void Generates_a_build_config_for_aliases_only_the_root_declares()
+    {
+        Write("tsconfig.json", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }], "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }""");
+        Write("tsconfig.app.json", """{ "compilerOptions": { "experimentalDecorators": true } }""");
+
+        var generated = ClientTsconfig.ForBuild(_root.FullName, Full(".nite"))!;
+
+        Assert.Equal(Full(".nite/tsconfig.build.json"), generated);
+        var json = JsonNode.Parse(File.ReadAllText(generated))!;
+        Assert.Equal(Full("tsconfig.app.json"), json["extends"]!.GetValue<string>());
+        Assert.Equal("./../src/*", json["compilerOptions"]!["paths"]!["@/*"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Ignores_values_of_the_wrong_type()
+    {
+        Write("tsconfig.json", """{ "extends": 42, "references": [{ "path": true }], "compilerOptions": { "baseUrl": 1, "paths": { "@/*": [1] }, "experimentalDecorators": true } }""");
+
+        Assert.Equal(Full("tsconfig.json"), ClientTsconfig.Find(_root.FullName));
+        Assert.True(Options(ClientTsconfig.TransformFlag(_root.FullName)!)["experimentalDecorators"]!.GetValue<bool>());
+        Assert.Null(TsconfigPaths.Load(_root.FullName).Resolve("@/x"));
+    }
+
+    [Fact]
     public void Applies_extends_and_keeps_only_options_that_change_a_transform()
     {
         Write("tsconfig.base.json", """{ "compilerOptions": { "experimentalDecorators": true, "useDefineForClassFields": true, "strict": true } }""");
@@ -151,6 +196,16 @@ public class DecoratorParityTests : IDisposable
             $$"""{ "extends": "./tsconfig.base.json" }|tsconfig.base.json={ "compilerOptions": {{Experimental}} }""",
             "experimental,experimental,setter"
         },
+        {
+            "Vite layout with paths in both files (shadcn)",
+            $$"""{ "files": [], "references": [{ "path": "./tsconfig.app.json" }], "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./*"] } } }|tsconfig.app.json={ "compilerOptions": { "experimentalDecorators": true, "useDefineForClassFields": false, "baseUrl": ".", "paths": { "@/*": ["./*"] } } }""",
+            "experimental,experimental,setter"
+        },
+        {
+            "paths in the base config",
+            $$"""{ "extends": "./tsconfig.base.json", "compilerOptions": {{Experimental}} }|tsconfig.base.json={ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./*"] } } }""",
+            "experimental,experimental,setter"
+        },
         { "standard decorators, define semantics", """{ "compilerOptions": { "target": "ES2022" } }""", "standard:field,standard:class" },
     };
 
@@ -193,5 +248,44 @@ public class DecoratorParityTests : IDisposable
         engine.Modules.Add("main", module);
         engine.Modules.Import("main");
         return engine.Evaluate("globalThis.log.join(',')").AsString();
+    }
+}
+
+/// <summary>Path aliases resolve the same in the dev server and the build, wherever they are declared.</summary>
+[Trait("Category", "Integration")]
+public class AliasParityTests : IDisposable
+{
+    private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("nite-aliases-");
+
+    public void Dispose() => _root.Delete(recursive: true);
+
+    private void Write(string relative, string text)
+    {
+        var path = Path.Combine(_root.FullName, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, text);
+    }
+
+    [Theory]
+    [InlineData("root only", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }], "compilerOptions": { "paths": { "@/*": ["./lib/*"] } } }""", """{ "compilerOptions": { "experimentalDecorators": true } }""")]
+    [InlineData("app config only", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }""", """{ "compilerOptions": { "paths": { "@/*": ["./lib/*"] } } }""")]
+    [InlineData("both", """{ "files": [], "references": [{ "path": "./tsconfig.app.json" }], "compilerOptions": { "paths": { "@/*": ["./lib/*"] } } }""", """{ "compilerOptions": { "paths": { "@/*": ["./lib/*"] } } }""")]
+    public async Task Dev_and_production_resolve_the_same_aliases(string layout, string root, string app)
+    {
+        _ = layout;
+        Write("nite.json", "{}");
+        Write("Client/index.html", "<!doctype html><html><head></head><body><script type=\"module\" src=\"./main.ts\"></script></body></html>");
+        Write("Client/main.ts", "import { value } from \"@/value\";\n(globalThis as any).log = [value];\n");
+        Write("Client/lib/value.ts", "export const value = \"from-alias\";\n");
+        Write("Client/tsconfig.json", root);
+        Write("Client/tsconfig.app.json", app);
+
+        var project = new NiteProject(_root.FullName);
+        Assert.Equal(Path.Combine(project.ClientRoot, "lib", "value.ts"), TsconfigPaths.Load(project.ClientRoot).Resolve("@/value"));
+
+        await using var esbuild = new EsbuildService(await EsbuildBinary.EnsureAsync(new HttpClient()));
+        var manifest = await new NiteBuilder(esbuild).BuildAsync(project);
+        var output = File.ReadAllText(Path.Combine(project.OutputDirectory, manifest.Entries["main.ts"].File));
+        Assert.Contains("from-alias", output);
     }
 }

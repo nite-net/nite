@@ -93,7 +93,7 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
             ["NITE_TITLE"] = safeName,
             ["NITE_NAMESPACE"] = SafeNamespace(safeName),
             ["NITE_PORT"] = Random.Shared.Next(5100, 5900).ToString(),
-            ["NITE_FRAMEWORK"] = settings.Framework ?? DefaultFramework(SdkVersion(directory)),
+            ["NITE_FRAMEWORK"] = settings.Framework ?? DefaultFramework(await SdkVersionAsync(directory, cancellationToken)),
         };
 
         if (settings.From is not null)
@@ -186,29 +186,44 @@ internal sealed class InitCommand : AsyncCommand<InitSettings>
 
     private static int FrameworkMajor(string framework) => int.Parse(framework["net".Length..framework.IndexOf('.')]);
 
-    /// <summary><c>dotnet --version</c> where the project goes, so a global.json there is honored; null if it fails.</summary>
-    private static string? SdkVersion(string directory)
+    /// <summary><c>dotnet --version</c> where the project goes, so a global.json there is honored; null if it fails or takes over 10 seconds.</summary>
+    private static async Task<string?> SdkVersionAsync(string directory, CancellationToken cancellationToken)
     {
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
+        {
+            WorkingDirectory = ExistingAncestor(directory),
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        System.Diagnostics.Process? process;
         try
         {
-            var start = new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
-            {
-                WorkingDirectory = ExistingAncestor(directory),
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            using var process = System.Diagnostics.Process.Start(start);
-            if (process is null)
-            {
-                return null;
-            }
-            var output = process.StandardOutput.ReadToEnd().Trim();
-            return process.WaitForExit(10_000) && process.ExitCode == 0 && output.Length > 0 ? output : null;
+            process = System.Diagnostics.Process.Start(start);
         }
         catch (System.ComponentModel.Win32Exception)
         {
+            return null; // no dotnet on PATH
+        }
+        if (process is null)
+        {
             return null;
+        }
+
+        using (process)
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            try
+            {
+                var output = (await process.StandardOutput.ReadToEndAsync(timeout.Token)).Trim();
+                await process.WaitForExitAsync(timeout.Token);
+                return process.ExitCode == 0 && output.Length > 0 ? output : null;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                process.Kill(entireProcessTree: true);
+                return null;
+            }
         }
     }
 

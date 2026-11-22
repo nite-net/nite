@@ -139,11 +139,12 @@ public sealed class NiteBuilder(EsbuildService esbuild, ILogger? logger = null, 
         {
             flags.Add("--loader:.js=jsx");
         }
-        if (ClientTsconfig.Find(project.ClientRoot) is { } tsconfig)
+        if (ClientTsconfig.ForBuild(project.ClientRoot, project.WorkDirectory, project.Directory) is { } tsconfig)
         {
-            // Always the same file the dev server compiles with, so decorators and class fields
-            // behave alike in both. Vite projects keep their options (and paths) in
-            // tsconfig.app.json, which esbuild would not find on its own.
+            // Always the config the dev server compiles with, so decorators, class fields and path
+            // aliases behave alike in both. Vite projects keep their options in tsconfig.app.json,
+            // which esbuild would not find on its own. One file for every module: esbuild's
+            // per-folder tsconfig discovery is off.
             flags.Add($"--tsconfig={tsconfig}");
         }
         flags.AddRange(AssetExtensions.Select(extension => $"--loader:{extension}=file"));
