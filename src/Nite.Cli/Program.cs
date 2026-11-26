@@ -60,6 +60,13 @@ app.Configure(config =>
     config.AddCommand<BuildCommand>("build")
         .WithDescription("Production build into wwwroot/_nite (dotnet publish runs this for you).");
 
+    config.AddCommand<TestCommand>("test")
+        .WithDescription("Run the client's tests with Vitest, configured from nite.json (needs Node.js).")
+        .WithExample("test")
+        .WithExample("test", "Button", "--watch")
+        .WithExample("test", "--coverage")
+        .WithExample("test", "--", "--reporter", "verbose");
+
     config.AddCommand<WatchCommand>("watch")
         .WithDescription("Run dotnet watch with Nite handling the browser (hot updates without losing state).")
         .WithExample("watch")
