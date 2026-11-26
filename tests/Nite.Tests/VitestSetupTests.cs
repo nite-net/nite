@@ -113,6 +113,10 @@ public class VitestSetupTests : IDisposable
     }
 
     [Fact]
+    public void Serves_the_ui_under_the_same_path_as_the_app() =>
+        Assert.Contains("uiBase: \"/_nite/vitest/\"", WithVitest().GenerateConfig());
+
+    [Fact]
     public void Turns_on_coverage_from_nite_json()
     {
         Package("vitest", "4.0.3");

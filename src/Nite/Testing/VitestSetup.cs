@@ -83,6 +83,9 @@ public sealed class VitestSetup
     public bool HasCoverageProvider(string provider) =>
         File.Exists(Path.Combine(Project.Directory, "node_modules", "@vitest", "coverage-" + provider, "package.json"));
 
+    /// <summary>Whether <c>@vitest/ui</c> is installed, which <c>--ui</c> needs.</summary>
+    public bool HasUi => File.Exists(Path.Combine(Project.Directory, "node_modules", "@vitest", "ui", "package.json"));
+
     /// <summary>The <c>test.coverage</c> provider from nite.json, checked; null when coverage is not on.</summary>
     public string? CoverageProvider => Project.Config.Test.Coverage switch
     {
@@ -219,6 +222,8 @@ public sealed class VitestSetup
         {
             js.Append("    include: ").Append(JsonSerializer.Serialize(config.Test.Include)).Append(",\n");
         }
+        // The same path as in the app, so the dev server can pass requests through unchanged.
+        js.Append("    uiBase: ").Append(Json(VitestUi.BasePath)).Append(",\n");
         js.Append("    coverage: {\n");
         if (CoverageProvider is { } provider)
         {

@@ -62,6 +62,12 @@ internal sealed class TestCommand : AsyncCommand<TestSettings>
             throw new CliException($"Coverage needs @vitest/coverage-{provider}. Add it at Vitest's version: [bold]nite add -D @vitest/coverage-{provider}@{vitest.Version}[/]");
         }
 
+        if (settings.Ui && !vitest.HasUi)
+        {
+            // Vitest would offer to install it with npm.
+            throw new CliException($"The Vitest UI is a package of its own. Add it at Vitest's version: [bold]nite add -D @vitest/ui@{vitest.Version}[/]");
+        }
+
         var configPath = vitest.WriteConfig();
         var arguments = new List<string> { vitest.Entry };
         if (!settings.Watch && !settings.Ui)
@@ -69,7 +75,14 @@ internal sealed class TestCommand : AsyncCommand<TestSettings>
             arguments.Add("run");
         }
         arguments.AddRange(["--config", configPath]);
-        if (settings.Ui) arguments.Add("--ui");
+        var uiPort = 0;
+        if (settings.Ui)
+        {
+            // A port of our choosing, on IPv4 loopback, so the dev server knows where to find it;
+            // --watch because Vitest otherwise runs once and exits when not in a terminal.
+            uiPort = VitestUi.FreePort();
+            arguments.AddRange(["--ui", "--watch", "--api.host", "127.0.0.1", "--api.port", uiPort.ToString(System.Globalization.CultureInfo.InvariantCulture), "--api.strictPort"]);
+        }
         if (settings.Coverage) arguments.Add("--coverage");
         arguments.AddRange(settings.Filters);
         arguments.AddRange(context.Remaining.Raw);
@@ -78,6 +91,21 @@ internal sealed class TestCommand : AsyncCommand<TestSettings>
         {
             Output.Hint(Markup.Escape($"{node.Path} {string.Join(' ', arguments)}"));
         }
-        return await ExternalProcess.RunAsync(node.Path, arguments, project.Directory, cancellationToken: cancellationToken);
+        if (!settings.Ui)
+        {
+            return await ExternalProcess.RunAsync(node.Path, arguments, project.Directory, cancellationToken: cancellationToken);
+        }
+
+        // This process lives as long as Vitest, so its id tells the dev server whether the UI is still up.
+        var state = VitestUi.Write(project, new VitestUi(uiPort, Environment.ProcessId));
+        Output.Hint($"With the app running, the UI is also at {VitestUi.BasePath} on the app's address: open the link below with the app's host and port.");
+        try
+        {
+            return await ExternalProcess.RunAsync(node.Path, arguments, project.Directory, cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            File.Delete(state);
+        }
     }
 }
