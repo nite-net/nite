@@ -74,6 +74,21 @@ public sealed class NiteConfig
     /// </summary>
     public string? Registry { get; init; }
 
+    /// <summary>
+    /// Pass over package versions published more recently than this, such as <c>"3d"</c>, when
+    /// choosing versions (<c>nite add</c>, <c>nite update</c>, or any install that resolves).
+    /// Malicious versions are usually found and unpublished within days, so waiting a few avoids
+    /// most of them. Units are <c>m</c>, <c>h</c>, <c>d</c> and <c>w</c>. Versions already in
+    /// <c>nite.lock.json</c> are kept. Off when unset.
+    /// </summary>
+    public string? MinimumReleaseAge { get; init; }
+
+    /// <summary>
+    /// Packages <see cref="MinimumReleaseAge"/> does not apply to: names, or <c>@scope/*</c> for a
+    /// whole scope (your own packages, say, or one you need a fix in today).
+    /// </summary>
+    public List<string> MinimumReleaseAgeExclude { get; init; } = [];
+
     /// <summary>Stylesheet options, named as in Vite's <c>css</c> config.</summary>
     public NiteCssConfig Css { get; init; } = new();
 

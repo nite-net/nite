@@ -73,7 +73,7 @@ public class PackageInstallerTests : IDisposable
         Assert.DoesNotContain(logger.Entries, e => e.Message.Contains("install script"));
     }
 
-    private sealed class ListLogger : ILogger<PackageInstaller>
+    internal sealed class ListLogger : ILogger<PackageInstaller>
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = [];
 
@@ -89,10 +89,27 @@ public class PackageInstallerTests : IDisposable
     internal sealed class FakeRegistry : HttpMessageHandler
     {
         private readonly Dictionary<string, Dictionary<string, object>> _versions = [];
+        private readonly Dictionary<string, Dictionary<string, string>> _times = [];
         private readonly Dictionary<string, byte[]> _tarballs = [];
 
-        public FakeRegistry Add(string name, string version, Dictionary<string, string>? dependencies = null, bool hasInstallScript = false)
+        /// <summary>Accept headers of the package document requests, in order.</summary>
+        public List<string> MetadataAccepts { get; } = [];
+
+        /// <summary>Send package documents gzip-encoded, as the npm registry does when asked.</summary>
+        public bool Gzip { get; init; }
+
+        public FakeRegistry Add(string name, string version, Dictionary<string, string>? dependencies = null, bool hasInstallScript = false,
+            DateTimeOffset? published = null, Dictionary<string, string>? scripts = null)
         {
+            if (published is { } time)
+            {
+                if (!_times.TryGetValue(name, out var times))
+                {
+                    _times[name] = times = new() { ["created"] = time.ToString("O") };
+                }
+                times[version] = time.ToString("O");
+                times["modified"] = time.ToString("O");
+            }
             var tarball = MakeTarball(name, version);
             var url = $"https://registry.example.com/{name}/-/{name}-{version}.tgz";
             _tarballs[url] = tarball;
@@ -106,6 +123,7 @@ public class PackageInstallerTests : IDisposable
                 ["version"] = version,
                 ["dependencies"] = dependencies,
                 ["hasInstallScript"] = hasInstallScript ? true : null,
+                ["scripts"] = scripts,
                 ["dist"] = new { tarball = url, integrity = "sha512-" + Convert.ToBase64String(SHA512.HashData(tarball)) },
             }.Where(p => p.Value is not null).ToDictionary(p => p.Key, p => p.Value!);
             return this;
@@ -124,9 +142,22 @@ public class PackageInstallerTests : IDisposable
             {
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
             }
-            var packument = new { name, distTags = new { latest = versions.Keys.Last() }, versions };
+            MetadataAccepts.Add(request.Headers.Accept.ToString());
+            var packument = new { name, distTags = new { latest = versions.Keys.Last() }, versions, time = _times.GetValueOrDefault(name) };
             var json = JsonSerializer.Serialize(packument).Replace("\"distTags\"", "\"dist-tags\"");
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+            if (!Gzip)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+            }
+            using var compressed = new MemoryStream();
+            using (var gzip = new GZipStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                gzip.Write(Encoding.UTF8.GetBytes(json));
+            }
+            var content = new ByteArrayContent(compressed.ToArray());
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            content.Headers.ContentEncoding.Add("gzip");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         }
 
         private static byte[] MakeTarball(string name, string version)

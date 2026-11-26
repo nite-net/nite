@@ -26,11 +26,13 @@ public sealed class PackageInstaller
 
     private readonly HttpClient _http;
     private readonly ILogger _logger;
+    private readonly TimeProvider _time;
 
-    public PackageInstaller(HttpClient http, ILogger<PackageInstaller>? logger = null)
+    public PackageInstaller(HttpClient http, ILogger<PackageInstaller>? logger = null, TimeProvider? time = null)
     {
         _http = http;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>Makes <c>node_modules</c> match the lockfile, resolving a new lockfile if needed.</summary>
@@ -72,7 +74,8 @@ public sealed class PackageInstaller
         // The dev server and `nite install` may run at once; only one of them may touch node_modules.
         await using var installLock = await AcquireInstallLockAsync(projectDirectory, cancellationToken);
 
-        var registry = new NpmRegistry(_http, NiteSettings.Load(projectDirectory).Registry, logger: _logger);
+        var releaseAge = ReleaseAgePolicy.For(config, _time);
+        var registry = new NpmRegistry(_http, NiteSettings.Load(projectDirectory).Registry, logger: _logger, fullMetadata: releaseAge is not null);
         var lockPath = Path.Combine(projectDirectory, LockFileName);
         var requires = new SortedDictionary<string, string>(config.AllDependencies.ToDictionary(), StringComparer.Ordinal);
 
@@ -110,7 +113,7 @@ public sealed class PackageInstaller
             using (var resolve = NiteTelemetry.Source.StartActivity("nite.packages.resolve"))
             {
                 resolve?.SetTag("nite.packages.requested", requires.Count);
-                lockFile = await ResolveAsync(registry, requires, preferred, cancellationToken);
+                lockFile = await ResolveAsync(registry, requires, preferred, releaseAge, cancellationToken);
             }
             lockFile.Save(lockPath);
         }
@@ -120,10 +123,12 @@ public sealed class PackageInstaller
     }
 
     private async Task<NiteLockFile> ResolveAsync(NpmRegistry registry, IReadOnlyDictionary<string, string> requires,
-        IReadOnlyDictionary<string, List<SemVersion>> preferred, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, List<SemVersion>> preferred, ReleaseAgePolicy? releaseAge, CancellationToken cancellationToken)
     {
         var placed = new SortedDictionary<string, NiteLockedPackage>(StringComparer.Ordinal);
         var withScripts = new HashSet<string>(StringComparer.Ordinal);
+        var heldBack = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var noPublishTimes = new SortedSet<string>(StringComparer.Ordinal);
         var queue = new Queue<(string Parent, string Name, string Range, bool IsPeer)>();
         foreach (var (name, range) in requires)
         {
@@ -134,7 +139,7 @@ public sealed class PackageInstaller
         {
             var (parent, name, rangeText, isPeer) = queue.Dequeue();
             var packument = await registry.GetPackumentAsync(name, cancellationToken);
-            var range = ParseRange(name, rangeText, packument);
+            var range = ParseRange(name, rangeText, packument, releaseAge);
 
             var visible = VisibleLocations(parent, name).FirstOrDefault(placed.ContainsKey);
             if (visible is not null && range.IsSatisfiedBy(SemVersion.Parse(placed[visible].Version)))
@@ -156,12 +161,31 @@ public sealed class PackageInstaller
             }
             var location = placed.ContainsKey(rootLocation) ? $"{parent}/node_modules/{name}" : rootLocation;
 
-            var versions = packument.Versions.Keys
-                .Select(v => SemVersion.TryParse(v, out var parsed) ? parsed : null)
-                .OfType<SemVersion>();
-            var chosen = (preferred.TryGetValue(name, out var kept) ? range.MaxSatisfying(kept) : null)
-                ?? range.MaxSatisfying(versions)
-                ?? throw new NitePackageException($"No version of '{name}' satisfies '{rangeText}'.");
+            var versions = ReleaseAgePolicy.Versions(packument).ToList();
+            // Versions already locked stay, whatever their age: they were chosen before.
+            var chosen = preferred.TryGetValue(name, out var kept) ? range.MaxSatisfying(kept) : null;
+            if (chosen is null)
+            {
+                var newest = range.MaxSatisfying(versions)
+                    ?? throw new NitePackageException($"No version of '{name}' satisfies '{rangeText}'.");
+                chosen = newest;
+                if (releaseAge is not null)
+                {
+                    if (releaseAge.CannotCheck(packument))
+                    {
+                        noPublishTimes.Add(name);
+                    }
+                    chosen = range.MaxSatisfying(releaseAge.OldEnough(packument, versions))
+                        ?? throw new NitePackageException(
+                            $"No version of '{name}' satisfies '{rangeText}' and is older than minimumReleaseAge ({releaseAge.Text}): " +
+                            $"{name}@{newest} was {releaseAge.DescribeAge(packument, newest.ToString())}. " +
+                            $"Wait, or add \"{name}\" to minimumReleaseAgeExclude in nite.json.");
+                    if (!chosen.Equals(newest))
+                    {
+                        heldBack[$"{name}@{newest}"] = $"{releaseAge.DescribeAge(packument, newest.ToString())}; using {chosen}";
+                    }
+                }
+            }
             var manifest = packument.Versions[chosen.ToString()];
             if (manifest.HasInstallScript) withScripts.Add(location);
             else withScripts.Remove(location);
@@ -191,6 +215,15 @@ public sealed class PackageInstaller
                 // Like npm 7+, missing peers are installed; they resolve from where the dependent sits.
                 queue.Enqueue((location, peer, peerRange, true));
             }
+        }
+
+        foreach (var (package, detail) in heldBack)
+        {
+            _logger.LogInformation("Passed over {Package} ({Detail}): newer than minimumReleaseAge ({Age})", package, detail, releaseAge!.Text);
+        }
+        foreach (var name in noPublishTimes)
+        {
+            _logger.LogWarning("The registry gives no publish times for {Package}, so minimumReleaseAge cannot apply to it", name);
         }
 
         // After resolution, once per package, so the messages are not lost among the queue's.
@@ -312,16 +345,18 @@ public sealed class PackageInstaller
         }
     }
 
-    internal static SemVerRange ParseRange(string name, string rangeText, NpmPackument packument)
+    internal static SemVerRange ParseRange(string name, string rangeText, NpmPackument packument, ReleaseAgePolicy? releaseAge = null)
     {
         var text = rangeText.Trim();
-        if (text.Length == 0 || text == "latest")
+        var tag = text.Length == 0 ? "latest" : text;
+        if (packument.DistTags.TryGetValue(tag, out var tagged))
         {
-            text = packument.DistTags.GetValueOrDefault("latest") ?? "*";
+            // A tag stands for one version; under a minimum age, for the newest one old enough.
+            text = releaseAge?.ForTag(packument, tagged)?.ToString() ?? tagged;
         }
-        else if (packument.DistTags.TryGetValue(text, out var tagged))
+        else if (tag == "latest")
         {
-            text = tagged;
+            text = "*";
         }
 
         if (SemVerRange.TryParse(text, out var range))
