@@ -34,12 +34,13 @@ internal sealed class InstallCommand : AsyncCommand<InstallSettings>
         var added = new List<(string Name, string Range)>();
         if (settings.Packages.Length > 0)
         {
-            var registry = new NpmRegistry(Tooling.Http, NiteSettings.Load(directory).Registry);
+            var releaseAge = ReleaseAgePolicy.For(NiteConfig.Load(directory));
+            var registry = Tooling.CreateRegistry(directory, releaseAge);
             foreach (var spec in settings.Packages)
             {
                 var (name, requested) = PackageSpec.Parse(spec);
                 var packument = await registry.GetPackumentAsync(name, cancellationToken);
-                var range = PackageSpec.RangeToSave(name, requested, packument, settings.Exact);
+                var range = PackageSpec.RangeToSave(name, requested, packument, settings.Exact, releaseAge);
                 NiteConfigFile.RemoveDependency(directory, name); // moving between sections, like pnpm
                 NiteConfigFile.SetDependency(directory, section, name, range);
                 added.Add((name, range));
@@ -211,19 +212,32 @@ internal sealed class UpdateCommand : AsyncCommand<UpdateSettings>
         }
         var direct = config.AllDependencies.Where(p => names.Count == 0 || names.Contains(p.Key)).OrderBy(p => p.Key, StringComparer.Ordinal).ToList();
 
-        var registry = new NpmRegistry(Tooling.Http, NiteSettings.Load(project.Directory).Registry);
+        var releaseAge = ReleaseAgePolicy.For(config);
+        var registry = Tooling.CreateRegistry(project.Directory, releaseAge);
         var rows = await AnsiConsole.Status().StartAsync("Checking the registry…", async _ =>
             await Task.WhenAll(direct.Select(async pair =>
             {
                 var packument = await registry.GetPackumentAsync(pair.Key, cancellationToken);
-                var versions = packument.Versions.Keys.Select(v => SemVersion.TryParse(v, out var parsed) ? parsed : null).OfType<SemVersion>().ToList();
-                var wanted = SemVerRange.TryParse(pair.Value, out var range) ? range.MaxSatisfying(versions) : null;
-                var latest = packument.DistTags.TryGetValue("latest", out var tag) && SemVersion.TryParse(tag, out var parsedLatest) ? parsedLatest : null;
+                var versions = ReleaseAgePolicy.Versions(packument).ToList();
+                var allowed = releaseAge is null ? versions : releaseAge.OldEnough(packument, versions).ToList();
+                var range = SemVerRange.TryParse(pair.Value, out var parsedRange) ? parsedRange : null;
+                var wanted = range?.MaxSatisfying(allowed);
+                var tag = packument.DistTags.GetValueOrDefault("latest");
+                var latest = tag is null ? null
+                    : releaseAge is not null ? releaseAge.ForTag(packument, tag)
+                    : SemVersion.TryParse(tag, out var parsedLatest) ? parsedLatest : null;
+                // Newer versions passed over only for their age, to say why they are not offered.
+                var held = releaseAge is not null && (range?.MaxSatisfying(versions) is { } newest && !newest.Equals(wanted)
+                    || SemVersion.TryParse(tag, out var tagged) && !tagged.Equals(latest));
                 var current = before?.Packages.GetValueOrDefault("node_modules/" + pair.Key)?.Version;
-                return new Row(pair.Key, pair.Value, current, wanted, latest, config.Dependencies.ContainsKey(pair.Key));
+                return new Row(pair.Key, pair.Value, current, wanted, latest, config.Dependencies.ContainsKey(pair.Key), held);
             })));
 
         var outdated = rows.Where(r => r.IsOutdated).ToList();
+        if (rows.Count(r => r.HeldBack) is var held and > 0)
+        {
+            Output.Hint($"{held} package(s) have newer versions published within minimumReleaseAge ({Markup.Escape(releaseAge!.Text)}); they are not offered yet.");
+        }
         if (outdated.Count == 0)
         {
             Output.Success($"All {rows.Length} package(s) are on their latest versions.");
@@ -270,7 +284,7 @@ internal sealed class UpdateCommand : AsyncCommand<UpdateSettings>
         return 0;
     }
 
-    private sealed record Row(string Name, string Range, string? Current, SemVersion? Wanted, SemVersion? Latest, bool IsDependency)
+    private sealed record Row(string Name, string Range, string? Current, SemVersion? Wanted, SemVersion? Latest, bool IsDependency, bool HeldBack)
     {
         private SemVersion? CurrentVersion => SemVersion.TryParse(Current, out var version) ? version : null;
         public bool WantedIsNewer => Wanted is not null && (CurrentVersion is null || Wanted > CurrentVersion);
@@ -298,19 +312,28 @@ internal static class PackageSpec
     }
 
     /// <summary>The range to write to nite.json: given ranges as-is, dist-tags and bare names as ^latest.</summary>
-    public static string RangeToSave(string name, string? requested, NpmPackument packument, bool exact)
+    /// <remarks>
+    /// Under a minimum release age, a tag means the newest version old enough, and a range must
+    /// have one: the installer would fail on it otherwise.
+    /// </remarks>
+    public static string RangeToSave(string name, string? requested, NpmPackument packument, bool exact, ReleaseAgePolicy? releaseAge = null)
     {
         string version;
         if (requested is null || packument.DistTags.ContainsKey(requested))
         {
-            version = packument.DistTags.GetValueOrDefault(requested ?? "latest")
-                ?? throw new CliException($"{Markup.Escape(name)} has no '{Markup.Escape(requested ?? "latest")}' tag.");
+            var tag = requested ?? "latest";
+            var tagged = packument.DistTags.GetValueOrDefault(tag)
+                ?? throw new CliException($"{Markup.Escape(name)} has no '{Markup.Escape(tag)}' tag.");
+            version = releaseAge is null ? tagged
+                : releaseAge.ForTag(packument, tagged)?.ToString() ?? throw TooNew(name, tagged, packument, releaseAge);
         }
         else if (SemVerRange.TryParse(requested, out var range))
         {
-            var versions = packument.Versions.Keys.Select(v => SemVersion.TryParse(v, out var parsed) ? parsed : null).OfType<SemVersion>();
-            var match = range.MaxSatisfying(versions)
+            var versions = ReleaseAgePolicy.Versions(packument).ToList();
+            var newest = range.MaxSatisfying(versions)
                 ?? throw new CliException($"No version of {Markup.Escape(name)} matches '{Markup.Escape(requested)}'.");
+            var match = releaseAge is null ? newest
+                : range.MaxSatisfying(releaseAge.OldEnough(packument, versions)) ?? throw TooNew(name, newest.ToString(), packument, releaseAge);
             // A real range is kept as written; a plain version honors --exact.
             if (!SemVersion.TryParse(requested, out _))
             {
@@ -324,6 +347,10 @@ internal static class PackageSpec
         }
         return exact ? version : "^" + version;
     }
+
+    private static CliException TooNew(string name, string version, NpmPackument packument, ReleaseAgePolicy releaseAge) => new(
+        $"{Markup.Escape(name)}@{Markup.Escape(version)} was {releaseAge.DescribeAge(packument, version)}, within minimumReleaseAge ({Markup.Escape(releaseAge.Text)}), " +
+        $"and no older version matches. Wait, or add \"{Markup.Escape(name)}\" to minimumReleaseAgeExclude in nite.json.");
 
     /// <summary>Keeps a range's operator when moving it to a new version: ^1.2.3 → ^2.0.0, 1.2.3 → 2.0.0.</summary>
     public static string KeepOperator(string range, string version) =>

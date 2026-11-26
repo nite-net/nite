@@ -25,17 +25,27 @@ public sealed class NpmRegistry
     private readonly string _cacheDirectory;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, Task<NpmPackument>> _packuments = new();
+    private readonly bool _fullMetadata;
 
     /// <param name="cacheDirectory">The cache root; defaults to the user cache directory.</param>
-    public NpmRegistry(HttpClient http, RegistrySettings? settings = null, string? cacheDirectory = null, ILogger? logger = null)
+    /// <param name="fullMetadata">
+    /// Ask for the full package document instead of the abbreviated one. It is two to three times
+    /// larger, but it is the only one with <see cref="NpmPackument.Time"/>, which a minimum release
+    /// age needs.
+    /// </param>
+    public NpmRegistry(HttpClient http, RegistrySettings? settings = null, string? cacheDirectory = null, ILogger? logger = null, bool fullMetadata = false)
     {
         _http = http;
         _settings = settings ?? RegistrySettings.Default;
         _cacheDirectory = cacheDirectory ?? NiteDirectories.Current.Cache;
         _logger = logger ?? NullLogger.Instance;
+        _fullMetadata = fullMetadata;
     }
 
     public RegistrySettings Settings => _settings;
+
+    /// <summary>Whether packuments carry publish times (<see cref="NpmPackument.Time"/>).</summary>
+    public bool FullMetadata => _fullMetadata;
 
     public Task<NpmPackument> GetPackumentAsync(string name, CancellationToken cancellationToken = default) =>
         _packuments.GetOrAdd(name, n => FetchPackumentAsync(n, cancellationToken));
@@ -47,9 +57,15 @@ public sealed class NpmRegistry
         var (bodyPath, etagPath) = MetadataPaths(registry, name);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        // The "corgi" document leaves out readmes and other fields an installer never needs.
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.npm.install-v1+json"));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json", 0.8));
+        if (!_fullMetadata)
+        {
+            // The "corgi" document leaves out readmes and other fields an installer never needs.
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.npm.install-v1+json"));
+        }
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json", _fullMetadata ? 1.0 : 0.8));
+        // Package documents compress well (the full one for @types/node is over 10 MB as is).
+        // Asked for here rather than on the handler, so tarballs are never decoded.
+        request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
         request.Headers.Authorization = _settings.AuthorizationFor(url);
         if (File.Exists(bodyPath) && File.Exists(etagPath))
         {
@@ -74,7 +90,7 @@ public sealed class NpmRegistry
         }
         response.EnsureSuccessStatusCode();
 
-        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var body = await ReadBodyAsync(response, cancellationToken);
         var packument = Deserialize(name, body);
         if (response.Headers.ETag is { } etag)
         {
@@ -149,8 +165,21 @@ public sealed class NpmRegistry
     {
         // One folder per registry, so a private registry's "react" never shadows the public one.
         var registryKey = Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(registry)))[..12];
-        var file = Path.Combine(_cacheDirectory, "metadata", registryKey, EncodeName(name));
+        var file = Path.Combine(_cacheDirectory, "metadata", registryKey, EncodeName(name)) + (_fullMetadata ? ".full" : "");
         return (file + ".json", file + ".etag");
+    }
+
+    private static async Task<byte[]> ReadBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (!response.Content.Headers.ContentEncoding.Contains("gzip", StringComparer.OrdinalIgnoreCase))
+        {
+            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        }
+        await using var compressed = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var gzip = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionMode.Decompress);
+        using var body = new MemoryStream();
+        await gzip.CopyToAsync(body, cancellationToken);
+        return body.ToArray();
     }
 
     private static NpmPackument Deserialize(string name, byte[] body) =>
@@ -216,9 +245,22 @@ public sealed class NpmPackument
     public Dictionary<string, string> DistTags { get; init; } = [];
 
     public Dictionary<string, NpmVersion> Versions { get; init; } = [];
+
+    /// <summary>
+    /// When each version was published, plus <c>created</c> and <c>modified</c>. Only the full
+    /// document has it (see <see cref="NpmRegistry.FullMetadata"/>); some private registries leave
+    /// it out there too.
+    /// </summary>
+    public Dictionary<string, JsonElement>? Time { get; init; }
+
+    /// <summary>When <paramref name="version"/> was published, if the registry says.</summary>
+    public DateTimeOffset? PublishedAt(string version) =>
+        Time?.GetValueOrDefault(version) is { ValueKind: JsonValueKind.String } value && value.TryGetDateTimeOffset(out var published)
+            ? published
+            : null;
 }
 
-public sealed class NpmVersion
+public sealed class NpmVersion : IJsonOnDeserialized
 {
     public string Name { get; init; } = "";
     public string Version { get; init; } = "";
@@ -229,10 +271,27 @@ public sealed class NpmVersion
 
     /// <summary>
     /// Set by the registry when the package has a preinstall, install or postinstall script (or a
-    /// binding.gyp, which implies one). Nite never runs them.
+    /// binding.gyp, which implies one). Nite never runs them. The full document has no such flag,
+    /// so there it is worked out from <see cref="Scripts"/> and <see cref="Gypfile"/>.
     /// </summary>
-    public bool HasInstallScript { get; init; }
+    public bool HasInstallScript { get; set; }
+
+    /// <summary>The package's scripts; only in the full document.</summary>
+    public Dictionary<string, JsonElement>? Scripts { get; init; }
+
+    /// <summary>Whether the package builds a native addon with node-gyp; only in the full document.</summary>
+    public JsonElement? Gypfile { get; init; }
+
     public NpmDist Dist { get; init; } = new();
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (Scripts is { } scripts && (scripts.ContainsKey("preinstall") || scripts.ContainsKey("install") || scripts.ContainsKey("postinstall"))
+            || Gypfile is { ValueKind: JsonValueKind.True })
+        {
+            HasInstallScript = true;
+        }
+    }
 }
 
 public sealed class NpmPeerMeta

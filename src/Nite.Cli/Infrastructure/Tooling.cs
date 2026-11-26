@@ -42,6 +42,10 @@ internal static class Tooling
             .SetMinimumLevel(level));
     }
 
+    /// <summary>A registry client for the project; with a minimum release age, one that fetches publish times.</summary>
+    public static NpmRegistry CreateRegistry(string projectDirectory, ReleaseAgePolicy? releaseAge) =>
+        new(Http, NiteSettings.Load(projectDirectory).Registry, fullMetadata: releaseAge is not null);
+
     public static PackageInstaller CreateInstaller(ILoggerFactory loggers) =>
         new(Http, loggers.CreateLogger<PackageInstaller>());
 
