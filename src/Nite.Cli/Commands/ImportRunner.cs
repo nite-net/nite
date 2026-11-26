@@ -66,6 +66,10 @@ internal static class ImportRunner
             AnsiConsole.MarkupLine($"  cd {Markup.Escape(Tooling.Relative(directory))}");
         }
         AnsiConsole.MarkupLine(settings.NoInstall ? "  nite install\n  nite watch" : "  nite watch");
+        if (plan.DevDependencies.ContainsKey("vitest"))
+        {
+            AnsiConsole.MarkupLine("  nite test    [grey](needs Node.js)[/]");
+        }
         Output.Hint("Your API goes in Program.cs; the app can call it at /api/... with no proxy or CORS.");
         return 0;
     }

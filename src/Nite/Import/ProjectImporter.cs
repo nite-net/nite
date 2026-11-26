@@ -26,6 +26,17 @@ public static partial class ProjectImporter
         "husky", "lint-staged", "concurrently", "cross-env", "nodemon", "@types/node", "@types/jest",
     ];
 
+    // Test packages kept for nite test, which runs Vitest. Jest itself is replaced by Vitest.
+    private static readonly string[] TestPackagePrefixes = ["vitest", "@vitest/", "@testing-library/", "jsdom", "happy-dom"];
+    private static readonly string[] JestPackages = ["jest", "ts-jest", "babel-jest", "jest-environment-jsdom", "@types/jest"];
+
+    /// <summary>Ranges added for a project whose Jest tests move to Vitest (current majors when written).</summary>
+    internal const string VitestRange = "^5.0.0";
+    internal const string JsdomRange = "^31.0.0";
+
+    private static readonly string[] VitestConfigNames =
+        ["vitest.config.ts", "vitest.config.mts", "vitest.config.js", "vitest.config.mjs", "vitest.config.cts", "vitest.config.cjs"];
+
     private static readonly string[] SupportedVitePlugins = ["@vitejs/plugin-react", "@vitejs/plugin-react-swc", "@tailwindcss/vite"];
 
     // Tailwind's integrations Nite replaces by running Tailwind itself (they need native code).
@@ -105,6 +116,9 @@ public static partial class ProjectImporter
             plan.EntryScript = "/src/" + Path.GetFileName(entry);
         }
 
+        var testFiles = sourceFiles.Where(IsTestFile).ToList();
+        var hasTests = testFiles.Any(f => !Path.GetFileName(f).StartsWith("setupTests.", StringComparison.Ordinal));
+
         // Packages
         foreach (var (name, spec, isDev) in dependencies.Select(d => (d.Key, d.Value, false)).Concat(devDependencies.Select(d => (d.Key, d.Value, true))))
         {
@@ -119,6 +133,11 @@ public static partial class ProjectImporter
             else if (TailwindIntegrations.Contains(name))
             {
                 plan.Skipped.Add(new SkippedPackage(name, spec, "Nite runs Tailwind itself; the tailwindcss package is all it needs"));
+            }
+            else if (hasTests && TestPackagePrefixes.Any(prefix => prefix.EndsWith('/') ? name.StartsWith(prefix, StringComparison.Ordinal) : name == prefix))
+            {
+                // nite test runs these.
+                plan.DevDependencies[name] = spec;
             }
             else if (IsStyleTooling(name))
             {
@@ -185,6 +204,10 @@ public static partial class ProjectImporter
 
         plan.Warnings.AddRange(scan.Warnings);
         AnalyzeViteConfig(source, plan, aliases);
+        if (hasTests)
+        {
+            AnalyzeTests(source, root, plan, testFiles, dependencies, devDependencies);
+        }
 
         // Locked versions
         (plan.Manager, plan.Lockfile) = LockfileReader.Detect(source);
@@ -286,6 +309,11 @@ public static partial class ProjectImporter
                 case ImportFileKind.GeneratedEnvironmentTypes:
                     File.WriteAllText(target, ConvertEnvironmentTypes("/// <reference types=\"vite/client\" />\n", plan.HasNodeTypes));
                     break;
+                case ImportFileKind.JestCompat:
+                    File.WriteAllText(target, target.EndsWith(".ts", StringComparison.Ordinal)
+                        ? JestCompat.Replace("globalThis.jest = vi;", "(globalThis as { jest?: typeof vi }).jest = vi;")
+                        : JestCompat);
+                    break;
                 case ImportFileKind.TsConfig:
                     File.WriteAllText(target, ConvertTsConfig(File.ReadAllText(file.Source)));
                     break;
@@ -332,11 +360,30 @@ public static partial class ProjectImporter
             }
             builder.Append("  \"css\": {\n    \"preprocessorOptions\": {\n").Append(string.Join(",\n", languages)).Append("\n    }\n  },\n");
         }
+        if (plan.TestGlobals || plan.TestEnvironment is not null || plan.TestSetupFiles.Count > 0)
+        {
+            var test = new List<string>();
+            if (plan.TestEnvironment is not null) test.Add($"    \"environment\": {JsonSerializer.Serialize(plan.TestEnvironment)}");
+            if (plan.TestGlobals) test.Add("    \"globals\": true");
+            if (plan.TestSetupFiles.Count > 0) test.Add($"    \"setupFiles\": {JsonSerializer.Serialize(plan.TestSetupFiles)}");
+            builder.Append("  \"test\": {\n").Append(string.Join(",\n", test)).Append("\n  },\n");
+        }
         builder.Append($"  \"dependencies\": {Object(plan.Dependencies, "  ")},\n");
         builder.Append($"  \"devDependencies\": {Object(plan.DevDependencies, "  ")}\n");
         builder.Append("}\n");
         return builder.ToString();
     }
+
+    /// <summary>Makes Jest's global jest object Vitest's vi for tests moved from Jest.</summary>
+    internal const string JestCompat = """
+        // Written by nite init --from: tests written for Jest call jest.fn(), jest.spyOn() and so on.
+        // Vitest's vi has the same methods. Move to vi over time and delete this file (and its entry
+        // in nite.json "test.setupFiles"). jest.mock() must become vi.mock() now: Vitest hoists only vi.mock.
+        import { vi } from "vitest";
+
+        globalThis.jest = vi;
+
+        """;
 
     /// <summary>Create React App's public/index.html: drop %PUBLIC_URL% and add the entry script CRA injects at build time.</summary>
     internal static string ConvertCreateReactAppHtml(string html, string entryScript)
@@ -445,6 +492,89 @@ public static partial class ProjectImporter
             warnings.Add("Stylus is not supported; convert those stylesheets to CSS, Sass or Less.");
         }
         return (warnings.ToList(), code.Count);
+    }
+
+    /// <summary>
+    /// Keeps the project's tests runnable with <c>nite test</c>. Vitest stays as it is; Jest tests
+    /// (Create React App's included) move to Vitest, whose API matches Jest's closely enough for
+    /// most of them with <c>globals</c> on. What cannot move is named.
+    /// </summary>
+    private static void AnalyzeTests(string source, JsonElement root, ImportPlan plan, List<string> testFiles,
+        Dictionary<string, string> dependencies, Dictionary<string, string> devDependencies)
+    {
+        bool Lists(string name) => dependencies.ContainsKey(name) || devDependencies.ContainsKey(name);
+        var usesJest = plan.Framework == CreateReactApp || JestPackages.Any(Lists);
+        var sourceDirectory = Path.Combine(source, "src");
+
+        if (VitestConfigNames.Select(n => Path.Combine(source, n)).FirstOrDefault(File.Exists) is { } vitestConfig)
+        {
+            // Next to src/, as it was, so its relative paths still point where they did.
+            plan.Files.Add(new ImportFile(vitestConfig, "Client/" + Path.GetFileName(vitestConfig), ImportFileKind.Copy));
+            var text = File.ReadAllText(vitestConfig);
+            foreach (var specifier in ImportScanner.FindSpecifiers(text).Distinct())
+            {
+                if (!ImportScanner.IsBare(specifier))
+                {
+                    plan.Warnings.Add($"{Path.GetFileName(vitestConfig)} imports {specifier}, which is not imported; nite test fails to load it until that import is removed.");
+                }
+                else if (ImportScanner.PackageName(specifier) is var package && package != "vitest" && !package.StartsWith("node:", StringComparison.Ordinal)
+                    && package is not ("path" or "url" or "fs") && !plan.DevDependencies.ContainsKey(package) && !plan.Dependencies.ContainsKey(package))
+                {
+                    plan.Warnings.Add($"{Path.GetFileName(vitestConfig)} imports {package}, which is not installed; remove it there (nite test configures what it did) or add it with nite add -D {package}.");
+                }
+            }
+        }
+        else if (ViteConfig(source) is { } viteConfig && TestBlock().IsMatch(File.ReadAllText(viteConfig)))
+        {
+            plan.Warnings.Add("vite.config has a \"test\" block, which is not imported. Move it to \"test\" in nite.json, or to a vitest.config.ts next to nite.json.");
+        }
+
+        if (!usesJest)
+        {
+            if (!Lists("vitest"))
+            {
+                plan.Notes.Add("The project has tests but no test runner in package.json. Add Vitest to run them: nite add -D vitest jsdom.");
+            }
+            return;
+        }
+
+        if (!Lists("vitest"))
+        {
+            plan.DevDependencies["vitest"] = VitestRange;
+        }
+        if (!Lists("jsdom") && !Lists("happy-dom"))
+        {
+            plan.DevDependencies["jsdom"] = JsdomRange;
+        }
+        plan.TestGlobals = true;
+        plan.TestEnvironment = Lists("happy-dom") && !Lists("jsdom") ? "happy-dom" : "jsdom";
+
+        var setup = NiteProject.ModuleExtensions.Select(e => Path.Combine(sourceDirectory, "setupTests" + e)).FirstOrDefault(File.Exists);
+        var usesJestObject = testFiles.Any(f => JestObject().IsMatch(File.ReadAllText(f)));
+        if (usesJestObject)
+        {
+            // jest.fn and friends, through Vitest's vi, which has the same methods.
+            var typescript = testFiles.Any(f => f.EndsWith(".ts", StringComparison.Ordinal) || f.EndsWith(".tsx", StringComparison.Ordinal));
+            var shim = "src/jest-compat." + (typescript ? "ts" : "js");
+            plan.Files.Add(new ImportFile("", "Client/" + shim, ImportFileKind.JestCompat));
+            plan.TestSetupFiles.Add(shim);
+            plan.Warnings.Add($"Tests use the jest object; {shim} makes it Vitest's vi, which has the same methods. jest.mock(...) calls must become vi.mock(...): Vitest moves only vi.mock to the top of the file, so a jest.mock runs too late to replace the import.");
+        }
+        if (setup is not null)
+        {
+            plan.TestSetupFiles.Add(NitePaths.ToUrlPath(Path.GetRelativePath(source, setup)));
+        }
+        plan.Notes.Add($"Jest tests run with Vitest through nite test: globals and the {plan.TestEnvironment} environment are on{(setup is null ? "" : ", and " + Path.GetFileName(setup) + " runs first")}.");
+
+        var jestConfig = new[] { "js", "ts", "mjs", "cjs", "json" }.Select(e => Path.Combine(source, "jest.config." + e)).FirstOrDefault(File.Exists);
+        if (jestConfig is not null || root.TryGetProperty("jest", out _))
+        {
+            plan.Warnings.Add($"{(jestConfig is null ? "package.json \"jest\"" : Path.GetFileName(jestConfig))} is not imported (moduleNameMapper, transforms, snapshot serializers). Put what you need in a vitest.config.ts next to nite.json.");
+        }
+        if (testFiles.Any(f => File.ReadAllText(f).Contains("toMatchSnapshot", StringComparison.Ordinal)))
+        {
+            plan.Warnings.Add("Snapshots are rewritten by Vitest in its own format on the first run; review the changes to __snapshots__.");
+        }
     }
 
     internal static bool IsTestFile(string path)
@@ -596,6 +726,12 @@ public static partial class ProjectImporter
     [GeneratedRegex(@"\.(test|spec)\.[cm]?[jt]sx?$")]
     private static partial Regex TestFileName();
 
+    [GeneratedRegex(@"\bjest\.(fn|mock|spyOn|useFakeTimers|useRealTimers|advanceTimersByTime|runAllTimers|clearAllMocks|resetAllMocks|restoreAllMocks|requireActual)\b")]
+    private static partial Regex JestObject();
+
+    [GeneratedRegex(@"\btest\s*:\s*\{")]
+    private static partial Regex TestBlock();
+
     [GeneratedRegex(@"\brequire\(\s*(?<q>[""'])(?<spec>[^""'\r\n]+)\k<q>\s*\)")]
     private static partial Regex RequireCall();
 
@@ -637,6 +773,11 @@ public sealed class ImportPlan
     public List<string> EnvPrefix { get; } = [];
     public bool JsxInJs { get; set; }
     public bool HasNodeTypes { get; set; }
+
+    /// <summary>The <c>test</c> section for nite.json, when tests move from Jest.</summary>
+    public bool TestGlobals { get; set; }
+    public string? TestEnvironment { get; set; }
+    public List<string> TestSetupFiles { get; } = [];
     public string? ScssAdditionalData { get; set; }
     public string? LessAdditionalData { get; set; }
     public SortedDictionary<string, string> Dependencies { get; } = new(StringComparer.Ordinal);
@@ -654,7 +795,7 @@ public sealed class ImportPlan
 
 public sealed record SkippedPackage(string Name, string Spec, string Reason);
 
-public enum ImportFileKind { Copy, CreateReactAppHtml, EnvironmentTypes, GeneratedEnvironmentTypes, TsConfig }
+public enum ImportFileKind { Copy, CreateReactAppHtml, EnvironmentTypes, GeneratedEnvironmentTypes, TsConfig, JestCompat }
 
 public sealed record ImportFile(string Source, string Destination, ImportFileKind Kind);
 

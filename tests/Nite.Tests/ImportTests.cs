@@ -267,6 +267,75 @@ public class ProjectImporterTests : IDisposable
     }
 
     [Fact]
+    public void Moves_create_react_app_tests_to_vitest()
+    {
+        Write("package.json", """
+            { "dependencies": { "react": "^18.2.0", "react-dom": "^18.2.0", "react-scripts": "5.0.1",
+              "@testing-library/react": "^13.4.0", "@testing-library/jest-dom": "^5.16.5" },
+              "jest": { "moduleNameMapper": { "x": "y" } } }
+            """);
+        Write("public/index.html", """<html><body><div id="root"></div></body></html>""");
+        Write("src/index.js", "import React from 'react';\n");
+        Write("src/setupTests.js", "import '@testing-library/jest-dom';\n");
+        Write("src/App.test.js", "import { render } from '@testing-library/react';\ntest('x', () => { const f = jest.fn(); expect(f).not.toHaveBeenCalled(); });\n");
+
+        var plan = ProjectImporter.Analyze(_root.FullName);
+
+        Assert.Equal("^13.4.0", plan.DevDependencies["@testing-library/react"]);
+        Assert.Equal("^5.16.5", plan.DevDependencies["@testing-library/jest-dom"]);
+        Assert.True(plan.DevDependencies.ContainsKey("vitest"));
+        Assert.True(plan.DevDependencies.ContainsKey("jsdom"));
+        Assert.True(plan.TestGlobals);
+        Assert.Equal("jsdom", plan.TestEnvironment);
+        Assert.Equal(["src/jest-compat.js", "src/setupTests.js"], plan.TestSetupFiles);
+        Assert.Contains(plan.Files, f => f.Destination == "Client/src/jest-compat.js" && f.Kind == ImportFileKind.JestCompat);
+        Assert.Contains(plan.Warnings, w => w.Contains("vi.mock"));
+        Assert.Contains(plan.Warnings, w => w.Contains("package.json \"jest\" is not imported"));
+
+        var json = ProjectImporter.NiteJson(plan);
+        Assert.Contains("\"globals\": true", json);
+        Assert.Contains("\"setupFiles\": [\"src/jest-compat.js\",\"src/setupTests.js\"]", json);
+
+        var target = Directory.CreateTempSubdirectory("nite-import-out-");
+        try
+        {
+            ProjectImporter.Apply(plan, target.FullName);
+            Assert.Contains("globalThis.jest = vi", File.ReadAllText(Path.Combine(target.FullName, "Client/src/jest-compat.js")));
+        }
+        finally
+        {
+            target.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Keeps_a_vite_projects_vitest_config()
+    {
+        ViteProject();
+        Write("package.json", """
+            { "type": "module", "dependencies": { "react": "^19.2.0", "react-dom": "^19.2.0" },
+              "devDependencies": { "vite": "^7.1.0", "vitest": "^4.0.0", "jsdom": "^27.0.0", "vite-tsconfig-paths": "^5.0.0" } }
+            """);
+        Write("vitest.config.ts", """
+            import { defineConfig } from "vitest/config";
+            import tsconfigPaths from "vite-tsconfig-paths";
+            import shared from "./shared.config";
+            export default defineConfig({ plugins: [tsconfigPaths()], test: { environment: "jsdom" } });
+            """);
+        Write("src/App.test.tsx", "import { test } from 'vitest';\ntest('x', () => {});\n");
+
+        var plan = ProjectImporter.Analyze(_root.FullName);
+
+        Assert.Equal("^4.0.0", plan.DevDependencies["vitest"]);
+        Assert.False(plan.TestGlobals); // a Vitest project keeps its own settings
+        Assert.Empty(plan.TestSetupFiles);
+        Assert.Contains(plan.Files, f => f.Destination == "Client/vitest.config.ts");
+        Assert.Contains(plan.Warnings, w => w.Contains("vite-tsconfig-paths, which is not installed"));
+        Assert.Contains(plan.Warnings, w => w.Contains("./shared.config, which is not imported"));
+        Assert.DoesNotContain("\"test\"", ProjectImporter.NiteJson(plan));
+    }
+
+    [Fact]
     public void Refuses_monorepos_and_unknown_layouts()
     {
         Write("package.json", """{ "workspaces": ["packages/*"] }""");

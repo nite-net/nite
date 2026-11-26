@@ -100,6 +100,19 @@ public class VitestSetupTests : IDisposable
         Assert.DoesNotContain("jsx", WithVitest().GenerateConfig().Replace("nite:config", ""), StringComparison.Ordinal);
 
     [Fact]
+    public void Compiles_jsx_in_js_files_for_create_react_app_projects()
+    {
+        Package("vitest", "5.1.2");
+        Package("vite", "8.4.0");
+
+        var config = Setup("""{ "jsxInJs": true }""").GenerateConfig();
+
+        Assert.Contains("import * as vite from \"vite\";", config);
+        Assert.Contains("name: \"nite:jsx-in-js\"", config);
+        Assert.Contains("name: \"nite:config\"", config); // still there after the extra plugin
+    }
+
+    [Fact]
     public void Turns_on_coverage_from_nite_json()
     {
         Package("vitest", "4.0.3");
