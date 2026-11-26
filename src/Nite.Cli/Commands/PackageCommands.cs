@@ -143,7 +143,10 @@ internal sealed class ListCommand : Command<ListSettings>
                     ? location["node_modules/".Length..]
                     : $"{nested[^1]} [grey](under {Markup.Escape(nested[^2].Replace("node_modules/", ""))})[/]";
                 var installed = Installed(project.Directory, location);
-                table.AddRow($"[grey]{(nested.Length == 1 ? Markup.Escape(label) : label)}[/]", "", installed is null ? "[red]missing[/]" : Markup.Escape(installed), "[grey]transitive[/]");
+                var state = installed is not null ? Markup.Escape(installed)
+                    : !NpmPlatform.Current.Supports(package.Os, package.Cpu, package.Libc) ? "[grey]other platform[/]"
+                    : "[red]missing[/]";
+                table.AddRow($"[grey]{(nested.Length == 1 ? Markup.Escape(label) : label)}[/]", "", state, package.Optional == true ? "[grey]optional[/]" : "[grey]transitive[/]");
             }
         }
 
@@ -380,7 +383,9 @@ internal static class LockDiff
         {
             AnsiConsole.MarkupLine($"[yellow]↑[/] {Markup.Escape(Name(location))} {Markup.Escape(old[location].Version)} → [bold]{Markup.Escape(package.Version)}[/]");
         }
-        Output.Success($"Packages: [green]+{added.Count}[/] [red]-{removed.Count}[/]{(changed.Count > 0 ? $" [yellow]~{changed.Count}[/]" : "")} [grey]({after.Packages.Count} installed)[/]");
+        var here = after.Packages.Values.Count(p => NpmPlatform.Current.Supports(p.Os, p.Cpu, p.Libc));
+        var elsewhere = after.Packages.Count - here;
+        Output.Success($"Packages: [green]+{added.Count}[/] [red]-{removed.Count}[/]{(changed.Count > 0 ? $" [yellow]~{changed.Count}[/]" : "")} [grey]({here} installed{(elsewhere > 0 ? $", {elsewhere} for other platforms" : "")})[/]");
         return true;
     }
 

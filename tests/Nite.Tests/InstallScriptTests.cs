@@ -14,7 +14,7 @@ public class InstallScriptsTests
     [Theory]
     [InlineData("core-js", "only prints a message")]
     [InlineData("es5-ext", "only prints a message")]
-    [InlineData("esbuild", "Nite downloads and runs itself")]
+    [InlineData("esbuild", "optional dependency")]
     [InlineData("node-sass", "Dart Sass")]
     [InlineData("bcrypt", "cannot run in a browser")]
     [InlineData("better-sqlite3", "cannot run in a browser")]
@@ -99,7 +99,8 @@ public class PackageInstallerTests : IDisposable
         public bool Gzip { get; init; }
 
         public FakeRegistry Add(string name, string version, Dictionary<string, string>? dependencies = null, bool hasInstallScript = false,
-            DateTimeOffset? published = null, Dictionary<string, string>? scripts = null)
+            DateTimeOffset? published = null, Dictionary<string, string>? scripts = null,
+            Dictionary<string, string>? optionalDependencies = null, string[]? os = null, string[]? cpu = null)
         {
             if (published is { } time)
             {
@@ -121,9 +122,13 @@ public class PackageInstallerTests : IDisposable
             {
                 ["name"] = name,
                 ["version"] = version,
-                ["dependencies"] = dependencies,
                 ["hasInstallScript"] = hasInstallScript ? true : null,
                 ["scripts"] = scripts,
+                // As npm publishes them: optional dependencies are listed under "dependencies" too.
+                ["dependencies"] = optionalDependencies is null ? dependencies : (dependencies ?? []).Concat(optionalDependencies).ToDictionary(),
+                ["optionalDependencies"] = optionalDependencies,
+                ["os"] = os,
+                ["cpu"] = cpu,
                 ["dist"] = new { tarball = url, integrity = "sha512-" + Convert.ToBase64String(SHA512.HashData(tarball)) },
             }.Where(p => p.Value is not null).ToDictionary(p => p.Key, p => p.Value!);
             return this;

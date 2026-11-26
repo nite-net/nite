@@ -15,7 +15,7 @@ internal static class InstallScripts
         /// <summary>The script only prints a message (a funding banner and the like).</summary>
         MessageOnly,
 
-        /// <summary>The script fetches a binary that Nite downloads itself.</summary>
+        /// <summary>The script fetches a binary that Nite provides another way.</summary>
         ProvidedByNite,
 
         /// <summary>A native Node.js addon, which cannot run in a browser at all.</summary>
@@ -29,7 +29,7 @@ internal static class InstallScripts
         ["core-js"] = (Kind.MessageOnly, "it only prints a message, so nothing is missing"),
         ["core-js-pure"] = (Kind.MessageOnly, "it only prints a message, so nothing is missing"),
         ["es5-ext"] = (Kind.MessageOnly, "it only prints a message, so nothing is missing"),
-        ["esbuild"] = (Kind.ProvidedByNite, "it fetches the esbuild binary, which Nite downloads and runs itself"),
+        ["esbuild"] = (Kind.ProvidedByNite, "it only checks for the esbuild binary, which comes from the platform package (@esbuild/…) Nite installs as an optional dependency"),
         ["node-sass"] = (Kind.NativeAddon, "it builds LibSass, a native addon. Nite compiles Sass with Dart Sass's native binary, which it downloads itself: replace node-sass with sass"),
         ["bcrypt"] = (Kind.NativeAddon, Native),
         ["better-sqlite3"] = (Kind.NativeAddon, Native),
