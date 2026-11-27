@@ -335,7 +335,7 @@ internal sealed class SassCompiler(HttpClient http, NiteProject project, ILogger
         var os = OperatingSystem.IsWindows() ? "win32"
             : OperatingSystem.IsMacOS() ? "darwin"
             : OperatingSystem.IsAndroid() ? "android"
-            : OperatingSystem.IsLinux() ? (IsMusl() ? "linux-musl" : "linux")
+            : OperatingSystem.IsLinux() ? (NpmPlatform.IsMusl() ? "linux-musl" : "linux")
             : throw new PlatformNotSupportedException("There is no Sass binary for this operating system. Set NITE_SASS_PATH to a dart-sass folder.");
         var arch = RuntimeInformation.OSArchitecture switch
         {
@@ -347,9 +347,6 @@ internal sealed class SassCompiler(HttpClient http, NiteProject project, ILogger
         };
         return $"{os}-{arch}";
     }
-
-    private static bool IsMusl() =>
-        Directory.Exists("/lib") && Directory.EnumerateFiles("/lib", "ld-musl-*").Any();
 
     public async ValueTask DisposeAsync()
     {

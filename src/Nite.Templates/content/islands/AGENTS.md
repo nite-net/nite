@@ -56,13 +56,15 @@ nite add <package>         # add an npm package (-D for dev-only ones, such as @
 nite remove <package>
 nite update                # newer versions within the ranges in nite.json
 nite install               # install what nite.json lists, after a clone
+nite test                  # client tests with Vitest (needs Node.js; add vitest first)
 dotnet publish -c Release  # runs `nite build`: minified, hashed bundles in wwwroot/_nite
 ```
 
 ## Rules
 
 - Never create `package.json`, `vite.config.*` or other Node tool configs, and never run `npm`,
-  `npx`, `yarn` or `pnpm`. Packages go in `nite.json` through `nite add`.
+  `npx`, `yarn` or `pnpm`. Packages go in `nite.json` through `nite add`. Tests run with
+  `nite test`, which configures Vitest from `nite.json`; test settings go in its `test` section.
 - Pages and their data come from Razor; islands that need more call endpoints in this app with
   relative URLs (`fetch("/api/...")`). One origin, so there is no proxy or CORS to set up.
 - Build-time settings: `import.meta.env.NITE_PUBLIC_*` from `.env` files. Anything with that

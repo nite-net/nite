@@ -222,6 +222,13 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
         _dependencies = await _optimizer!.OptimizeAsync(_project, specifiers, _lockFingerprint, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Vitest's UI socket and its open-in-editor link, which it puts at the site root rather than
+    /// under the UI's path, so they cannot live under <c>/_nite</c>.
+    /// </summary>
+    internal Task HandleVitestRootAsync(HttpContext context) =>
+        new VitestUiProxy(_project).ProxyAsync(context, context.Request.Path.Value!);
+
     /// <summary>Handles a request under <c>/_nite</c> (the prefix is already in PathBase).</summary>
     public async Task HandleAsync(HttpContext context)
     {
@@ -247,6 +254,19 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             case "/runtime/config.js":
                 await WriteAsync(context, RuntimeSources.ClientConfig, "text/javascript");
                 return;
+            case "/vitest" or "/coverage":
+                context.Response.Redirect(context.Request.PathBase + path + "/");
+                return;
+        }
+        if (path.StartsWith("/vitest/", StringComparison.Ordinal))
+        {
+            await new VitestUiProxy(_project).ProxyAsync(context, NiteProject.BasePath + path);
+            return;
+        }
+        if (path.StartsWith("/coverage/", StringComparison.Ordinal))
+        {
+            await new VitestUiProxy(_project).ServeCoverageAsync(context, Uri.UnescapeDataString(path["/coverage/".Length..]));
+            return;
         }
 
         try
@@ -714,6 +734,8 @@ public sealed partial class NiteDevServer : INiteAssets, IAsyncDisposable
             _ when path.StartsWith("/src/", StringComparison.Ordinal) => "/src/{**path}",
             _ when path.StartsWith("/deps/", StringComparison.Ordinal) => "/deps/{file}",
             _ when path.StartsWith("/npm/", StringComparison.Ordinal) => "/npm/{**specifier}",
+            _ when path.StartsWith("/vitest/", StringComparison.Ordinal) => "/vitest/{**path}",
+            _ when path.StartsWith("/coverage/", StringComparison.Ordinal) => "/coverage/{**path}",
             "/ws" or "/client.js" or "/refresh.js" or "/runtime/islands.js" or "/runtime/renderer.js" or "/runtime/config.js" => path,
             _ => "/{**path}",
         };

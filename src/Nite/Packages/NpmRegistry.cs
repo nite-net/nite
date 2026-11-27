@@ -279,6 +279,18 @@ public sealed class NpmVersion : IJsonOnDeserialized
     /// <summary>The package's scripts; only in the full document.</summary>
     public Dictionary<string, JsonElement>? Scripts { get; init; }
 
+    /// <summary>Operating systems the package runs on, npm style (<c>linux</c>, <c>!win32</c>).</summary>
+    [JsonConverter(typeof(StringListConverter))]
+    public List<string>? Os { get; init; }
+
+    /// <summary>Processors the package runs on (<c>x64</c>, <c>arm64</c>).</summary>
+    [JsonConverter(typeof(StringListConverter))]
+    public List<string>? Cpu { get; init; }
+
+    /// <summary>C libraries the package runs with (<c>glibc</c>, <c>musl</c>); only in the full document.</summary>
+    [JsonConverter(typeof(StringListConverter))]
+    public List<string>? Libc { get; init; }
+
     /// <summary>Whether the package builds a native addon with node-gyp; only in the full document.</summary>
     public JsonElement? Gypfile { get; init; }
 
@@ -307,3 +319,33 @@ public sealed class NpmDist
 }
 
 public sealed class NitePackageException(string message) : Exception(message);
+
+/// <summary>
+/// Reads a list of strings that old manifests sometimes give as one string (<c>"os": "darwin"</c>),
+/// and ignores anything else rather than failing the whole document.
+/// </summary>
+internal sealed class StringListConverter : JsonConverter<List<string>?>
+{
+    public override List<string>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.String:
+                return [reader.GetString()!];
+            case JsonTokenType.StartArray:
+                var list = new List<string>();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                {
+                    if (reader.TokenType == JsonTokenType.String) list.Add(reader.GetString()!);
+                    else reader.Skip();
+                }
+                return list;
+            default:
+                reader.Skip();
+                return null;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string>? value, JsonSerializerOptions options) =>
+        JsonSerializer.Serialize(writer, value, options);
+}

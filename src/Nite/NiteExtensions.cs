@@ -103,6 +103,13 @@ public static class NiteExtensions
             branch.UseWebSockets();
             branch.Run(server.HandleAsync);
         });
+        app.MapWhen(
+            context => context.Request.Path.Value is Testing.VitestUi.ApiPath or Testing.VitestUi.EditorPath,
+            branch =>
+            {
+                branch.UseWebSockets();
+                branch.Run(server.HandleVitestRootAsync);
+            });
         return app;
     }
 

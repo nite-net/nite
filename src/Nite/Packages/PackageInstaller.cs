@@ -14,10 +14,12 @@ namespace Nite.Packages;
 /// <c>nite.lock.json</c>; with a current lockfile an install never asks the registry for metadata.
 /// </summary>
 /// <remarks>
-/// Deliberately small: registry packages only (no git, file: or npm: aliases), optional
-/// dependencies are skipped, install scripts never run (packages that have one get a warning when
-/// they are resolved), and hoisting is "top level unless that would conflict, otherwise nested
-/// under the dependent".
+/// Deliberately small: registry packages only (no git, file: or npm: aliases), install scripts
+/// never run (packages that have one get a warning when they are resolved), and hoisting is "top
+/// level unless that would conflict, otherwise nested under the dependent". Optional dependencies
+/// are resolved for every platform, so the lockfile is the same on every machine, and installed
+/// only where their <c>os</c>, <c>cpu</c> and <c>libc</c> fit; one that cannot be resolved is
+/// left out, as npm does.
 /// </remarks>
 public sealed class PackageInstaller
 {
@@ -27,12 +29,15 @@ public sealed class PackageInstaller
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
+    private readonly NpmPlatform _platform;
 
-    public PackageInstaller(HttpClient http, ILogger<PackageInstaller>? logger = null, TimeProvider? time = null)
+    /// <param name="platform">The machine to install for; defaults to this one.</param>
+    public PackageInstaller(HttpClient http, ILogger<PackageInstaller>? logger = null, TimeProvider? time = null, NpmPlatform? platform = null)
     {
         _http = http;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
         _time = time ?? TimeProvider.System;
+        _platform = platform ?? NpmPlatform.Current;
     }
 
     /// <summary>Makes <c>node_modules</c> match the lockfile, resolving a new lockfile if needed.</summary>
@@ -80,7 +85,8 @@ public sealed class PackageInstaller
         var requires = new SortedDictionary<string, string>(config.AllDependencies.ToDictionary(), StringComparer.Ordinal);
 
         var lockFile = NiteLockFile.TryLoad(lockPath);
-        if (update is not null || lockFile is null || !lockFile.Requires.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(requires))
+        if (update is not null || lockFile is null || lockFile.Resolver < NiteLockFile.CurrentResolver
+            || !lockFile.Requires.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(requires))
         {
             if (requires.Count > 0)
             {
@@ -129,17 +135,30 @@ public sealed class PackageInstaller
         var withScripts = new HashSet<string>(StringComparer.Ordinal);
         var heldBack = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var noPublishTimes = new SortedSet<string>(StringComparer.Ordinal);
-        var queue = new Queue<(string Parent, string Name, string Range, bool IsPeer)>();
+        // Every dependency edge, to work out afterwards which packages only optional edges reach.
+        var edges = new List<(string Parent, string Name, bool IsOptional)>();
+        var queue = new Queue<(string Parent, string Name, string Range, bool IsPeer, bool IsOptional)>();
         foreach (var (name, range) in requires)
         {
-            queue.Enqueue(("", name, range, false));
+            queue.Enqueue(("", name, range, false, false));
         }
 
         while (queue.Count > 0)
         {
-            var (parent, name, rangeText, isPeer) = queue.Dequeue();
-            var packument = await registry.GetPackumentAsync(name, cancellationToken);
-            var range = ParseRange(name, rangeText, packument, releaseAge);
+            var (parent, name, rangeText, isPeer, isOptional) = queue.Dequeue();
+            edges.Add((parent, name, isOptional));
+            NpmPackument packument;
+            SemVerRange range;
+            try
+            {
+                packument = await registry.GetPackumentAsync(name, cancellationToken);
+                range = ParseRange(name, rangeText, packument, releaseAge);
+            }
+            catch (NitePackageException ex) when (isOptional)
+            {
+                _logger.LogDebug("Left out optional dependency {Package}@{Range} of {Parent}: {Reason}", name, rangeText, PackageNameAt(parent), ex.Message);
+                continue;
+            }
 
             var visible = VisibleLocations(parent, name).FirstOrDefault(placed.ContainsKey);
             if (visible is not null && range.IsSatisfiedBy(SemVersion.Parse(placed[visible].Version)))
@@ -164,6 +183,11 @@ public sealed class PackageInstaller
             var versions = ReleaseAgePolicy.Versions(packument).ToList();
             // Versions already locked stay, whatever their age: they were chosen before.
             var chosen = preferred.TryGetValue(name, out var kept) ? range.MaxSatisfying(kept) : null;
+            if (chosen is null && isOptional && range.MaxSatisfying(releaseAge is null ? versions : releaseAge.OldEnough(packument, versions)) is null)
+            {
+                _logger.LogDebug("Left out optional dependency {Package}@{Range} of {Parent}: no version matches", name, rangeText, PackageNameAt(parent));
+                continue;
+            }
             if (chosen is null)
             {
                 var newest = range.MaxSatisfying(versions)
@@ -195,15 +219,23 @@ public sealed class PackageInstaller
                 Version = manifest.Version,
                 Resolved = manifest.Dist.Tarball,
                 Integrity = manifest.Dist.Integrity ?? "sha1-" + Convert.ToBase64String(Convert.FromHexString(manifest.Dist.Shasum ?? "")),
+                Os = manifest.Os is { Count: > 0 } ? manifest.Os : null,
+                Cpu = manifest.Cpu is { Count: > 0 } ? manifest.Cpu : null,
+                Libc = NpmPlatform.LibcOf(name, manifest.Libc)?.ToList(),
             };
 
             foreach (var (dependency, dependencyRange) in manifest.Dependencies ?? [])
             {
+                // npm lists optional dependencies under "dependencies" too; they are queued below.
                 if (manifest.OptionalDependencies?.ContainsKey(dependency) == true)
                 {
                     continue;
                 }
-                queue.Enqueue((location, dependency, dependencyRange, false));
+                queue.Enqueue((location, dependency, dependencyRange, false, false));
+            }
+            foreach (var (dependency, dependencyRange) in manifest.OptionalDependencies ?? [])
+            {
+                queue.Enqueue((location, dependency, dependencyRange, false, true));
             }
 
             foreach (var (peer, peerRange) in manifest.PeerDependencies ?? [])
@@ -213,7 +245,7 @@ public sealed class PackageInstaller
                     continue;
                 }
                 // Like npm 7+, missing peers are installed; they resolve from where the dependent sits.
-                queue.Enqueue((location, peer, peerRange, true));
+                queue.Enqueue((location, peer, peerRange, true, false));
             }
         }
 
@@ -226,7 +258,11 @@ public sealed class PackageInstaller
             _logger.LogWarning("The registry gives no publish times for {Package}, so minimumReleaseAge cannot apply to it", name);
         }
 
+        MarkOptional(placed, edges);
+
         // After resolution, once per package, so the messages are not lost among the queue's.
+        // Packages for other platforms are never installed here, so their scripts do not matter.
+        withScripts.RemoveWhere(l => !Supported(placed[l]));
         var scripted = withScripts.Select(l => (Name: PackageNameAt(l), placed[l].Version)).Distinct()
             .OrderBy(p => p.Name, StringComparer.Ordinal).ThenBy(p => SemVersion.Parse(p.Version));
         foreach (var (name, version) in scripted)
@@ -244,10 +280,38 @@ public sealed class PackageInstaller
 
         return new NiteLockFile
         {
+            Resolver = NiteLockFile.CurrentResolver,
             Requires = new Dictionary<string, string>(requires),
             Packages = new Dictionary<string, NiteLockedPackage>(placed),
         };
     }
+
+    /// <summary>
+    /// Marks the packages that only optional dependencies lead to (directly or through other
+    /// packages), as npm's lockfile does, so an install can leave them out when they do not fit.
+    /// </summary>
+    private static void MarkOptional(SortedDictionary<string, NiteLockedPackage> placed, List<(string Parent, string Name, bool IsOptional)> edges)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal);
+        var byParent = edges.Where(e => !e.IsOptional).ToLookup(e => e.Parent, StringComparer.Ordinal);
+        var pending = new Stack<string>([""]);
+        while (pending.Count > 0)
+        {
+            foreach (var (parent, name, _) in byParent[pending.Pop()])
+            {
+                if (VisibleLocations(parent, name).FirstOrDefault(placed.ContainsKey) is { } target && required.Add(target))
+                {
+                    pending.Push(target);
+                }
+            }
+        }
+        foreach (var (location, package) in placed)
+        {
+            package.Optional = required.Contains(location) ? null : true;
+        }
+    }
+
+    private bool Supported(NiteLockedPackage package) => _platform.Supports(package.Os, package.Cpu, package.Libc);
 
     private async Task MaterializeAsync(NpmRegistry registry, string projectDirectory, NiteLockFile lockFile, CancellationToken cancellationToken)
     {
@@ -255,22 +319,38 @@ public sealed class PackageInstaller
         var statePath = Path.Combine(nodeModules, StateFileName);
         var fingerprint = lockFile.Fingerprint();
         var previous = InstallState.TryLoad(statePath);
-        if (previous?.Fingerprint == fingerprint && lockFile.Packages.Keys.All(p => File.Exists(Path.Combine(projectDirectory, p, "package.json"))))
+
+        // The lockfile holds every platform's binaries; this machine gets the ones that fit it.
+        var wanted = new Dictionary<string, NiteLockedPackage>(StringComparer.Ordinal);
+        foreach (var (location, package) in lockFile.Packages)
+        {
+            if (Supported(package))
+            {
+                wanted[location] = package;
+            }
+            else if (package.Optional != true)
+            {
+                _logger.LogWarning("{Package}@{Version} is for {Platform}, so it is not installed on this machine", PackageNameAt(location), package.Version,
+                    string.Join(" ", new[] { package.Os, package.Cpu, package.Libc }.Where(l => l is not null).Select(l => string.Join(",", l!))));
+            }
+        }
+
+        if (previous?.Fingerprint == fingerprint && wanted.Keys.All(p => File.Exists(Path.Combine(projectDirectory, p, "package.json"))))
         {
             return;
         }
 
         using var activity = NiteTelemetry.Source.StartActivity("nite.packages.materialize");
 
-        // Remove packages a previous nite install created that the lockfile no longer lists.
-        foreach (var stale in previous?.Packages.Except(lockFile.Packages.Keys) ?? [])
+        // Remove packages a previous nite install created that are no longer wanted here.
+        foreach (var stale in previous?.Packages.Except(wanted.Keys) ?? [])
         {
             DeleteDirectory(Path.Combine(projectDirectory, stale));
         }
 
         var installed = 0;
         // Parents before children, so replacing a parent folder never deletes a fresh nested install.
-        var pending = lockFile.Packages.OrderBy(p => p.Key.Length).ToList();
+        var pending = wanted.OrderBy(p => p.Key.Length).ToList();
         foreach (var level in pending.GroupBy(p => p.Key.Split("/node_modules/").Length).OrderBy(g => g.Key))
         {
             await Parallel.ForEachAsync(level, new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = cancellationToken }, async (entry, token) =>
@@ -304,7 +384,7 @@ public sealed class PackageInstaller
         }
 
         Directory.CreateDirectory(nodeModules);
-        new InstallState { Fingerprint = fingerprint, Packages = lockFile.Packages.Keys.ToList() }.Save(statePath);
+        new InstallState { Fingerprint = fingerprint, Packages = wanted.Keys.ToList() }.Save(statePath);
     }
 
     private async Task<FileStream> AcquireInstallLockAsync(string projectDirectory, CancellationToken cancellationToken)
@@ -434,7 +514,18 @@ public sealed class PackageInstaller
 /// <summary><c>nite.lock.json</c>: the exact packages and where they sit in <c>node_modules</c>.</summary>
 public sealed class NiteLockFile
 {
+    /// <summary>
+    /// What the resolver that wrote the file knew: 2 adds optional dependencies. An older file is
+    /// re-resolved once, keeping its versions, so it gains what it lacks. The format itself is
+    /// unchanged, so older NiteFx versions still read it.
+    /// </summary>
+    public const int CurrentResolver = 2;
+
     public int LockfileVersion { get; init; } = 1;
+
+    /// <summary>See <see cref="CurrentResolver"/>; missing means 1.</summary>
+    public int Resolver { get; init; } = 1;
+
     public Dictionary<string, string> Requires { get; init; } = [];
     public Dictionary<string, NiteLockedPackage> Packages { get; init; } = [];
 
@@ -459,6 +550,7 @@ public sealed class NiteLockFile
     {
         var ordered = new NiteLockFile
         {
+            Resolver = Resolver,
             Requires = Requires.OrderBy(p => p.Key, StringComparer.Ordinal).ToDictionary(),
             Packages = Packages.OrderBy(p => p.Key, StringComparer.Ordinal).ToDictionary(),
         };
@@ -482,4 +574,12 @@ public sealed class NiteLockedPackage
     public string Version { get; init; } = "";
     public string Resolved { get; init; } = "";
     public string Integrity { get; init; } = "";
+
+    /// <summary>True when only optional dependencies lead here, so a machine it does not fit skips it.</summary>
+    public bool? Optional { get; set; }
+
+    /// <summary>The package's <c>os</c>, <c>cpu</c> and <c>libc</c> constraints, when it has any.</summary>
+    public List<string>? Os { get; init; }
+    public List<string>? Cpu { get; init; }
+    public List<string>? Libc { get; init; }
 }

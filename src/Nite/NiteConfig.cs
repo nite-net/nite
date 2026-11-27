@@ -92,6 +92,9 @@ public sealed class NiteConfig
     /// <summary>Stylesheet options, named as in Vite's <c>css</c> config.</summary>
     public NiteCssConfig Css { get; init; } = new();
 
+    /// <summary>Test settings for <c>nite test</c>, which runs Vitest.</summary>
+    public NiteTestConfig Test { get; init; } = new();
+
     public Dictionary<string, string> Dependencies { get; init; } = [];
 
     /// <summary>Installed for editor tooling (such as <c>@types/react</c>) but never bundled.</summary>
@@ -136,6 +139,31 @@ public sealed class NiteConfig
             throw new InvalidOperationException($"{path} is not valid: {ex.Message}", ex);
         }
     }
+}
+
+/// <summary>The <c>test</c> section of <c>nite.json</c>: what <c>nite test</c> tells Vitest.</summary>
+public sealed class NiteTestConfig
+{
+    /// <summary>
+    /// Vitest's test environment: <c>jsdom</c>, <c>happy-dom</c> or <c>node</c>. Defaults to
+    /// <c>jsdom</c> or <c>happy-dom</c> when one is installed, otherwise <c>node</c>.
+    /// </summary>
+    public string? Environment { get; init; }
+
+    /// <summary>Make <c>describe</c>, <c>it</c>, <c>expect</c> and <c>vi</c> globals, as in Jest.</summary>
+    public bool Globals { get; init; }
+
+    /// <summary>Modules run before each test file, relative to the client root.</summary>
+    public List<string> SetupFiles { get; init; } = [];
+
+    /// <summary>Globs of test files, relative to the client root. Vitest's default when empty.</summary>
+    public List<string> Include { get; init; } = [];
+
+    /// <summary>Collect coverage on every run with this provider: <c>v8</c> or <c>istanbul</c>.</summary>
+    public string? Coverage { get; init; }
+
+    /// <summary>What <c>nite:config</c> gives code under test, in place of the server's values.</summary>
+    public JsonElement? Config { get; init; }
 }
 
 /// <summary>The <c>css</c> section of <c>nite.json</c>.</summary>
